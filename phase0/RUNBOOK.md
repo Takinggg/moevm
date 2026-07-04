@@ -1166,10 +1166,15 @@ Validation:
 - Graph-mode prefetch fix: graph-build initially lost the legacy `prefetch_candidates()` call. It now reuses the same cached prefetch helper in graph-mode after deduplicating topk ids. This changes DFlash graph-mode from `copy_prefetches=0` / 18.17 tok/s to `copy_prefetches=2063` / 18.85 tok/s on the same DFlash run.
 - Phase A DFlash rerun: best current graph-build DFlash is `moevm/runs/qwen3_next_q4_graph_dflash_prefetch_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.359s, 18.85 tok/s, accept 81.71%, `graph_fill_fallback=0`. Same-prompt graph normal is `moevm/runs/qwen3_next_q4_graph_normal_sameprompt_cap128_n100.log`, 100 tokens in 5.368s, 18.63 tok/s. Legacy-path DFlash rerun is 19.58 tok/s.
 - Negative DFlash A/Bs: `draft16 p_min=0.5` is 15.89 tok/s because it creates more topk fills/readbacks; `draft8 p_min=0.7` is 18.48 tok/s because it drafts less even though accepted draft tokens are cleaner.
+- Fused graph-pool callbacks: the scheduler now calls the graph-pool callback once per topk ids tensor and reuses the returned shadow ids for the other component nodes in the same split. This reduces graph callback attempts from three per layer to one per layer.
+- Expert-major graph fill: graph-mode fills all component pool tensors for one expert while holding a single pinned sidecar record, instead of pinning the same expert once per component.
+- Validation: `moevm/runs/qwen3_next_q4_graph_expertmajor_parity_compare_n50.json` vs the previous graph-build logits has 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
+- Result: `moevm/runs/qwen3_next_q4_graph_expertmajor_normal_cap128_n100.log`, 100 tokens in 5.061s, 19.76 tok/s. `moevm/runs/qwen3_next_q4_graph_expertmajor_dflash_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.039s, 20.04 tok/s, accept 81.71%.
+- Negative capacity check: `moevm/runs/qwen3_next_q4_graph_expertmajor_cap256_sameprompt_c192_n50.log`, 50 tokens in 2.539s, 19.69 tok/s. Cap256 removed pool evictions but was slower than cap128; keep cap128 as the default.
 
 Interpretation:
 
 - Graph-build is now functionally real: it runs without the old MoEVM copy hook and without op-offload dependence.
 - It is not yet a 25+ tok/s breakthrough. The current graph scheduler hook is roughly tied with the best warm P0.d/P0.c runs.
 - A.1 says the GPU is not saturated; the practical bottleneck is still scheduler/CPU rendezvous around ids readback and graph-pool callbacks.
-- DFlash is correct and fallback-free on graph-build, but it is not yet a headline accelerator. Next useful optimization is reducing per-layer ids readback/sync overhead or batching/fusing graph-pool callbacks, then rerunning DFlash/speculative.
+- DFlash is correct and fallback-free on graph-build, and after callback fusion it matches the old audited DFlash headline without the old copy-hook path. Next useful optimization is reducing per-layer ids readback/sync itself or reducing copied expert bytes.
