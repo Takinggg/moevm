@@ -183,6 +183,17 @@ MoEVM speculative validation:
   - cap128: `qwen3_next_q4_audit_spec_dflash_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.031s, 20.08 tok/s, accept 81.71%, `pool_fallback=0`, `fallback_k_overflow=0`.
 - Verdict: speculation is integrated and starts to win on longer generation. After audit hardening, cap128 DFlash is 20.08 vs 18.21 tok/s on same-prompt non-spec n100 (+10.3%). Cap64 must not be used for DFlash because fallback dominates.
 
+Graph-build scheduler hook validation:
+
+- Branch: `codex/moevm-graph-build`.
+- Mechanism: post-build graph transform rewrites routed `MUL_MAT_ID` expert weights to backend-resident `moevm_pool_*` tensors while preserving the original topk ids dependency. A scheduler-level graph-pool hook then forces a split before the first pool `MUL_MAT_ID` for each ids tensor, reads topk ids once, fills all layer component pools, patches `src[2]` to a shadow ids tensor for the split, and restores the graph after compute.
+- Failed prototype to avoid: `qwen3_next_q4_graph_pool_c192_n50.log` used `cb_eval` for topk readback. It was functionally correct but only 2.07 tok/s because scheduler eval created thousands of tiny graph computes and 22.94s of backend sync.
+- Smoke: `qwen3_next_q4_graph_sched_smoke_n1.log`, token identical to P0.d reference, `copy_hook_calls=0`, `graph_patch_applied=864`, `graph_topk_fills=519`, `runtime_errors=0`.
+- Throughput: `qwen3_next_q4_graph_sched_c192_n50.log`, 50 tokens in 2.284s, 21.90 tok/s, `copy_hook_calls=0`, `callback_handled=8640`, `graph_fill_fallback=0`, `runtime_errors=0`.
+- Logits parity: `qwen3_next_q4_graph_parity_off_n50.logits` vs `qwen3_next_q4_graph_parity_sched_n50.logits`, 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
+- Jitter/fence: `qwen3_next_q4_graph_sched_jitter_delay_cap16_n20.log`, cap16 with `--moevm-inject-delay-us 500` and `--moevm-test-force-pinned-fence`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=15`, `runtime_errors=0`. Logits vs no-delay cap16 reference: `max_abs=0.0`.
+- Interpretation: graph-build no longer depends on op-offload or the old expert copy hook, and it keeps correctness under the moved drain point. Current throughput is roughly tied with the best warm P0.d/P0.c runs, not yet the 25+ tok/s target; the next gain must come from reducing per-layer ids readback/sync cost or fusing layer rendezvous more aggressively.
+
 Fast non-MoEVM baseline:
 
 - Log: `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log`
@@ -198,4 +209,4 @@ Fast non-MoEVM baseline:
 
 ## Next Technical Target
 
-The Q4 sidecar path is correct and now faster than both the old `-ngl0` baseline and the same-placement `-ngl99 --op-offload` baseline. P0.b moved the prototype best to 20.13 tok/s; after epoch/pinning hardening, the mergeable best was 18.64 tok/s. P0.c removes the false `ub > 1` pool fallback, with the audit fix applying capacity to the deduplicated expert union. The audited same-prompt cap128 baseline is 18.21 tok/s, and audited DFlash cap128 reaches 20.08 tok/s with `fallback_k_overflow=0`. Next work should reduce graph patch/split overhead and investigate recurrent-state rollback or higher-acceptance draft methods before treating speculation as a 25-30 tok/s path.
+The Q4 sidecar path is correct and now faster than both the old `-ngl0` baseline and the same-placement `-ngl99 --op-offload` baseline. P0.b moved the prototype best to 20.13 tok/s; after epoch/pinning hardening, the mergeable best was 18.64 tok/s. P0.c removes the false `ub > 1` pool fallback, with the audit fix applying capacity to the deduplicated expert union. The graph-build scheduler hook removes dependency on op-offload/old copy-hook and reaches 21.67-21.90 tok/s with logits bit-exactness and jitter/fence validation. The audited same-prompt cap128 baseline is 18.21 tok/s, and audited DFlash cap128 reaches 20.08 tok/s with `fallback_k_overflow=0`. Next work should reduce per-layer ids readback/sync overhead, then rerun DFlash on top of graph-build before treating speculation as a 25-30 tok/s path.

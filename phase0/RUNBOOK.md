@@ -1141,3 +1141,29 @@ Smoke result over three small Python tasks:
 - MoEVM pool cap10: 2/3 passed, 10.85 tok/s average.
 - Pool generated exactly the same tokens and text as baseline on all 3 tasks.
 - The failed task is a model/prompt quality miss on relative Unix paths, not a MoEVM divergence.
+
+## Graph-Build Scheduler Hook
+
+Goal: remove the old op-offload expert copy hook from the hot path by patching the built graph to use stable backend-resident expert pool tensors.
+
+Implementation checkpoint:
+
+- Branch: `codex/moevm-graph-build`.
+- `llama_context` has an experimental graph transform hook called after `model.build_graph()` and before scheduler allocation.
+- `llama-moe-trace --moevm-graph-mode pool` rewrites routed expert `MUL_MAT_ID` `src[0]` to `moevm_pool_*` tensors but keeps the original topk ids dependency at build time.
+- `ggml-backend` has an experimental scheduler graph-pool callback. It forces a split before the first pool `MUL_MAT_ID` for each ids tensor, reads ids once, calls back into MoEVM to fill the layer pool, patches `src[2]` to shadow ids for the split, then restores graph sources after compute.
+- The early `cb_eval` prototype is rejected for performance: `qwen3_next_q4_graph_pool_c192_n50.log` was correct but only 2.07 tok/s because it forced a scheduler sync around every topk callback.
+
+Validation:
+
+- Smoke: `moevm/runs/qwen3_next_q4_graph_sched_smoke_n1.log`, token matches reference, `copy_hook_calls=0`, `graph_patch_applied=864`, `graph_topk_fills=519`, `runtime_errors=0`.
+- Throughput: `moevm/runs/qwen3_next_q4_graph_sched_c192_n50.log`, 50 tokens in 2.284s, 21.90 tok/s, `copy_hook_calls=0`, `callback_handled=8640`, `graph_fill_fallback=0`, `runtime_errors=0`.
+- Logits parity: `moevm/runs/qwen3_next_q4_graph_parity_off_vs_sched_n50.json`, 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
+- Jitter/fence stress: `moevm/runs/qwen3_next_q4_graph_sched_jitter_delay_cap16_n20.log`, cap16, `--moevm-inject-delay-us 500`, `--moevm-test-force-pinned-fence`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=15`, `runtime_errors=0`.
+- Jitter logits parity: `moevm/runs/qwen3_next_q4_graph_sched_jitter_cap16_n20_compare.json`, `max_abs=0.0`.
+
+Interpretation:
+
+- Graph-build is now functionally real: it runs without the old MoEVM copy hook and without op-offload dependence.
+- It is not yet a 25+ tok/s breakthrough. The current graph scheduler hook is roughly tied with the best warm P0.d/P0.c runs.
+- Next useful optimization is reducing per-layer ids readback/sync overhead, then rerunning DFlash/speculative on top of graph-build.
