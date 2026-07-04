@@ -308,8 +308,10 @@ def main() -> int:
             prompt = PROMPTS[iteration % len(PROMPTS)]
             take_logits = args.logits_every > 0 and iteration % args.logits_every == 0
             cmd = build_command(args, prompt, args.out_dir, iteration, take_logits)
+            stdout_path = args.out_dir / f"iter_{iteration:05d}_{prompt.name}.safe_stdout"
             run_started = time.time()
-            proc = subprocess.run(cmd)
+            with stdout_path.open("w", encoding="utf-8", errors="replace") as stdout:
+                proc = subprocess.run(cmd, stdout=stdout, stderr=subprocess.STDOUT)
             elapsed = time.time() - run_started
 
             log_path = args.out_dir / f"iter_{iteration:05d}_{prompt.name}.log"
@@ -320,6 +322,7 @@ def main() -> int:
                 "elapsed_s": elapsed,
                 "returncode": proc.returncode,
                 "log": str(log_path),
+                "safe_stdout": str(stdout_path),
                 "logits": str(args.out_dir / f"iter_{iteration:05d}_{prompt.name}.logits") if take_logits else None,
             }
             if log_path.exists():
