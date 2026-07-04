@@ -1,0 +1,74 @@
+{
+  "summary": {
+    "header": {
+      "path": "moevm/phase0/headers/gpt-oss-120b-unsloth-q4km-00001.head.gguf",
+      "file_bytes_available": 67108864,
+      "gguf_version": 3,
+      "tensor_count": 548,
+      "metadata_count": 40,
+      "alignment": 32,
+      "tensor_info_end": 13014883,
+      "data_start": 13014912,
+      "truncated_data_ok": true
+    },
+    "architecture": "gpt-oss",
+    "metadata_selected": {
+      "general.architecture": "gpt-oss",
+      "gpt-oss.block_count": 36,
+      "gpt-oss.context_length": 131072,
+      "gpt-oss.embedding_length": 2880,
+      "gpt-oss.attention.head_count": 64,
+      "gpt-oss.attention.head_count_kv": 8,
+      "gpt-oss.attention.layer_norm_rms_epsilon": 9.999999747378752e-06,
+      "gpt-oss.expert_count": 128,
+      "gpt-oss.expert_used_count": 4,
+      "gpt-oss.attention.key_length": 64,
+      "gpt-oss.attention.value_length": 64,
+      "gpt-oss.attention.sliding_window": 128,
+      "gpt-oss.expert_feed_forward_length": 2880,
+      "gpt-oss.rope.scaling.original_context_length": 4096
+    },
+    "layer_count": 36,
+    "expert_count": 128,
+    "expert_used_count": 4,
+    "tensor_bytes_by_category": {
+      "output": 615340800,
+      "embedding": 398154240,
+      "attention": 494648064,
+      "routed_expert": 48068444160,
+      "router": 41302016
+    },
+    "routed_expert_pool_bytes": 48068444160,
+    "resident_non_routed_bytes": 1549445120,
+    "slice_bytes_per_layer_expert_avg": 12949473.103448275,
+    "slice_bytes_per_layer_expert_min": 4429440.0,
+    "slice_bytes_per_layer_expert_max": 13253760.0,
+    "active_expert_bytes_per_token_all_miss": 1864724126.8965516,
+    "kv_cache_q8_bytes_estimate": 2566914048,
+    "cache_budget_projection": [
+      {
+        "cache_gib": 20.0,
+        "uniform_hit_floor": 0.44675538922206715,
+        "miss_mb_per_token": 1031.6485737931034,
+        "sync_tok_s_est": 4.538652451375144,
+        "overlap_tok_s_est": 4.846611653439602
+      },
+      {
+        "cache_gib": 24.0,
+        "uniform_hit_floor": 0.5361064670664806,
+        "miss_mb_per_token": 865.0334631724137,
+        "sync_tok_s_est": 5.3474022020942735,
+        "overlap_tok_s_est": 5.780123212416614
+      },
+      {
+        "cache_gib": 28.0,
+        "uniform_hit_floor": 0.625457544910894,
+        "miss_mb_per_token": 698.4183525517241,
+        "sync_tok_s_est": 6.506872178932554,
+        "overlap_tok_s_est": 7.159032951714575
+      }
+    ],
+    "routed_tensor_count": 171
+  },
+  "tensors": null
+}

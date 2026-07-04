@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "header": {
+      "path": "moevm/phase0/headers/gpt-oss-120b-ggml-mxfp4-00003.head.gguf",
+      "file_bytes_available": 67108864,
+      "gguf_version": 3,
+      "tensor_count": 344,
+      "metadata_count": 3,
+      "alignment": 32,
+      "tensor_info_end": 21196,
+      "data_start": 21216,
+      "truncated_data_ok": true
+    },
+    "architecture": "unknown",
+    "metadata_selected": {},
+    "layer_count": 36,
+    "expert_count": 2880,
+    "expert_used_count": null,
+    "tensor_bytes_by_category": {
+      "routed_expert": 31100682240,
+      "attention": 508624128,
+      "router": 26551296
+    },
+    "routed_expert_pool_bytes": 31100682240,
+    "resident_non_routed_bytes": 535175424,
+    "slice_bytes_per_layer_expert_avg": 568360.4210526316,
+    "slice_bytes_per_layer_expert_min": 195840.0,
+    "slice_bytes_per_layer_expert_max": 589056.0,
+    "active_expert_bytes_per_token_all_miss": null,
+    "kv_cache_q8_bytes_estimate": null,
+    "cache_budget_projection": [],
+    "routed_tensor_count": 109
+  },
+  "tensors": null
+}

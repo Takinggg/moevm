@@ -1,0 +1,84 @@
+{
+  "summary": {
+    "header": {
+      "path": "moevm/phase0/headers/deepseek-v4-flash-preyazz-q2k.head.gguf",
+      "file_bytes_available": 67108864,
+      "gguf_version": 3,
+      "tensor_count": 1328,
+      "metadata_count": 50,
+      "alignment": 32,
+      "tensor_info_end": 5325331,
+      "data_start": 5325344,
+      "truncated_data_ok": true
+    },
+    "architecture": "deepseek4",
+    "metadata_selected": {
+      "general.architecture": "deepseek4",
+      "deepseek4.block_count": 43,
+      "deepseek4.context_length": 1048576,
+      "deepseek4.embedding_length": 4096,
+      "deepseek4.attention.head_count": 64,
+      "deepseek4.attention.head_count_kv": 1,
+      "deepseek4.rope.scaling.original_context_length": 65536,
+      "deepseek4.attention.layer_norm_rms_epsilon": 9.999999974752427e-07,
+      "deepseek4.expert_used_count": 6,
+      "deepseek4.attention.key_length": 512,
+      "deepseek4.attention.value_length": 512,
+      "deepseek4.attention.q_lora_rank": 1024,
+      "deepseek4.attention.sliding_window": 128,
+      "deepseek4.leading_dense_block_count": 0,
+      "deepseek4.expert_feed_forward_length": 2048,
+      "deepseek4.expert_count": 256,
+      "deepseek4.expert_shared_count": 1,
+      "deepseek4.expert_weights_scale": 1.5,
+      "deepseek4.expert_weights_norm": true,
+      "deepseek4.attention.indexer.head_count": 64,
+      "deepseek4.attention.indexer.key_length": 128,
+      "deepseek4.attention.indexer.top_k": 512
+    },
+    "layer_count": 43,
+    "expert_count": 256,
+    "expert_used_count": 6,
+    "tensor_bytes_by_category": {
+      "other_resident": 94307384,
+      "output": 434397184,
+      "embedding": 173752320,
+      "attention": 1726483748,
+      "routed_expert": 100277420032,
+      "shared_expert": 391708672,
+      "router": 180355072
+    },
+    "routed_expert_pool_bytes": 100277420032,
+    "resident_non_routed_bytes": 3001004380,
+    "slice_bytes_per_layer_expert_avg": 9109504.0,
+    "slice_bytes_per_layer_expert_min": 9109504.0,
+    "slice_bytes_per_layer_expert_max": 9109504.0,
+    "active_expert_bytes_per_token_all_miss": 2350252032.0,
+    "kv_cache_q8_bytes_estimate": 3066036224,
+    "cache_budget_projection": [
+      {
+        "cache_gib": 20.0,
+        "uniform_hit_floor": 0.21415425798895768,
+        "miss_mb_per_token": 1846.935552,
+        "sync_tok_s_est": 2.6083297348120755,
+        "overlap_tok_s_est": 2.707187045365836
+      },
+      {
+        "cache_gib": 24.0,
+        "uniform_hit_floor": 0.2569851095867492,
+        "miss_mb_per_token": 1746.272256,
+        "sync_tok_s_est": 2.752891249361241,
+        "overlap_tok_s_est": 2.863241961739098
+      },
+      {
+        "cache_gib": 28.0,
+        "uniform_hit_floor": 0.29981596118454074,
+        "miss_mb_per_token": 1645.6089599999998,
+        "sync_tok_s_est": 2.914417047577089,
+        "overlap_tok_s_est": 3.0383889013341303
+      }
+    ],
+    "routed_tensor_count": 129
+  },
+  "tensors": null
+}

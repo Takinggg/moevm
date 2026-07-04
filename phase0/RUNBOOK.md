@@ -1,0 +1,1143 @@
+# MoEVM Phase 0 Runbook
+
+This runbook is for the current MacBook Pro M5 Pro 48GB.
+
+## Current Local Facts
+
+- macOS 26.5.1.
+- Apple M5 Pro, 18 cores.
+- RAM: 48GB.
+- Free disk after model cleanup: about 310GiB.
+- `iogpu.wired_limit_mb=0`.
+- Native Metal build reports `recommendedMaxWorkingSetSize = 40200.90 MB`.
+- Ollama 0.31.1.
+- No `llama-server` / `llama-cli` in PATH before Phase 0 setup.
+- Native llama.cpp has now been built in `external/llama.cpp`.
+- `llama-moe-trace` has been added locally under `external/llama.cpp/examples/moe-trace` and built into `external/llama.cpp/build/bin/llama-moe-trace`.
+- Ollama local model list is empty.
+- Docker VM memory reported around 31.3GiB, too high for paging experiments.
+- `gpt-oss-120b Q4_K_M` is downloaded in `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M`.
+- `gpt-oss-120b Q4_K_M` corrected multi-shard expert pool: 56.88GiB; `(layer, expert)` slices are uniform at 12.64MiB.
+- `Qwen3-Coder-Next-UD-Q3_K_XL.gguf` is downloaded in `$MOEVM_MODELS_DIR/qwen3-coder-next`.
+- Packed Qwen3Next Q3 sidecar: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm`, 31.35GiB.
+- `Qwen3-Coder-Next-Q4_K_M.gguf` is downloaded in `$MOEVM_MODELS_DIR/qwen3-coder-next-q4`, about 45GiB.
+
+## Safety Status
+
+Do not continue Metal runtime tuning on `gpt-oss-120b Q4_K_M` by trial and error on this Mac.
+
+Observed failures:
+
+- `llama-bench` does not expose `--no-repack`; CPU-MoE tests can trigger large anonymous-memory copies for MXFP4 experts.
+- `llama-cli --no-repack -ngl 99 -ncmoe 36 -fa on` avoided the earlier global Jetsam pattern but hit Metal `kIOGPUCommandBufferCallbackErrorOutOfMemory`.
+- A reduced `llama-cli --no-repack -ngl 16 -ncmoe 36 -fa on` run was followed by a macOS watchdog kernel panic. The panic report names `WindowServer`, not llama.cpp directly, but the test path is unsafe.
+
+Allowed next steps:
+
+- Offline GGUF inspection.
+- SSD read measurement only when cache state is declared.
+- Route tracing on smaller/lab models first.
+- Cache simulation.
+- Controlled CPU-expert arena prototype that avoids large Metal residency.
+- Run risky commands only through `moevm/phase0/safe_run.py`.
+
+Blocked for now:
+
+- Further `gpt-oss-120b` Metal `-ngl` / `-fa` tuning.
+- Any run likely to allocate near the Metal recommended working set.
+- Any benchmark without a pre-flight check proving Docker VM is down and no LLM process is already running.
+- Parallel full-model Python reads on GGUF files above 30GiB. This caused severe macOS memory pressure on 2026-07-04 when `gguf_inspect.py` and `sidecar_plan.py` both touched the Q4 GGUF before the parser was changed to stream the header.
+
+## Safe Runner
+
+Use `safe_run.py` for every risky benchmark or prototype run:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/<run>.log \
+  --summary moevm/runs/<run>.summary \
+  --max-seconds 600 \
+  --min-free-pct 8 \
+  --max-wired-gib 34 \
+  --max-rss-mib 38000 \
+  --max-log-mb 64 \
+  -- <command> <args...>
+```
+
+What it does:
+
+- Refuses to start if Docker/Virtualization VM is running, unless `--allow-docker` is passed.
+- Refuses to start when another model I/O job is already active, unless `--allow-concurrent-model-io` is passed for tiny controlled tests.
+- Requires `sidecar_pack.py` to use `--nocache`, so packed-sidecar creation does not intentionally fill the unified-memory file cache.
+- Refuses known-dangerous `gpt-oss-120b` + Metal command shapes unless `--allow-known-unsafe` is passed.
+- Kills the whole process group on low free memory, high wired memory, excessive RSS, excessive swapout delta, timeout, oversized logs, or Metal OOM log patterns.
+- Writes a compact summary with the stop reason and log tail.
+
+Limits:
+
+- It cannot guarantee protection from an instantaneous kernel/Metal driver panic.
+- A process in macOS uninterruptible kernel I/O wait may remain visible briefly after `SIGKILL`; the wrapper records this instead of hanging forever.
+- It is a safety fuse, not proof that a command is safe.
+- For `gpt-oss-120b`, keep the static block enabled. Do not pass `--allow-known-unsafe` on this Mac unless the command is intentionally part of a controlled crash reproduction.
+
+## Docker Memory
+
+During MoEVM inference tests, stop Docker Desktop or cap it to 4-6GiB.
+
+Safer stop/start:
+
+```bash
+docker desktop stop
+docker desktop start
+```
+
+Cap setting when Docker is stopped:
+
+```bash
+python3 - <<'PY'
+import json, pathlib
+p = pathlib.Path.home() / "Library/Group Containers/group.com.docker/settings-store.json"
+d = json.loads(p.read_text())
+d["MemoryMiB"] = 6144
+p.write_text(json.dumps(d, indent=1))
+print("MemoryMiB ->", d["MemoryMiB"])
+PY
+```
+
+## Inspect Hugging Face Without Full Model Download
+
+List candidate repos:
+
+```bash
+curl -sL "https://huggingface.co/api/models?search=Qwen3-Coder-Next&limit=50" \
+  | jq -r '.[].id'
+```
+
+List GGUF files in the Unsloth repo:
+
+```bash
+curl -sL "https://huggingface.co/api/models/unsloth/Qwen3-Coder-Next-GGUF/tree/main?recursive=true" \
+  | jq -r '.[] | select(.path|endswith(".gguf")) | "\(.size/1000000000)GB\t\(.path)"' \
+  | sort -n
+```
+
+Download only the first 64MiB of a GGUF:
+
+```bash
+mkdir -p moevm/phase0/headers
+curl -L -r 0-67108863 \
+  -o moevm/phase0/headers/qwen3-coder-next-q4km.head.gguf \
+  "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M.gguf"
+python3 moevm/phase0/gguf_inspect.py \
+  moevm/phase0/headers/qwen3-coder-next-q4km.head.gguf \
+  --json moevm/phase0/headers/qwen3-coder-next-q4km.inspect.json
+```
+
+If the tensor-info table is larger than 64MiB, repeat with 128MiB:
+
+```bash
+curl -L -r 0-134217727 -o moevm/phase0/headers/q4.head128.gguf "<GGUF_URL>"
+```
+
+## Build llama.cpp Native Metal
+
+Recommended location in this workspace:
+
+```bash
+mkdir -p external
+git clone --depth 1 https://github.com/ggml-org/llama.cpp external/llama.cpp
+cmake -S external/llama.cpp -B external/llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
+cmake --build external/llama.cpp/build -j 16
+external/llama.cpp/build/bin/llama-cli --version
+```
+
+Current build:
+
+- commit: `2d97363`
+- Metal backend included.
+- `qwen3next.cpp` compiled.
+- useful binaries:
+  - `external/llama.cpp/build/bin/llama-cli`
+  - `external/llama.cpp/build/bin/llama-server`
+  - `external/llama.cpp/build/bin/llama-bench`
+  - `external/llama.cpp/build/bin/llama-eval-callback`
+
+## Download Strategy
+
+Do not download Q4 first.
+
+1. Download a Q3-class quant to validate kernels and quality with lower pressure.
+2. Trace routing and simulate cache.
+3. Download Q4 only if the gates pass.
+
+Example:
+
+```bash
+mkdir -p ~/models/qwen3-coder-next
+hf download unsloth/Qwen3-Coder-Next-GGUF Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
+  --local-dir ~/models/qwen3-coder-next
+```
+
+## Smoke Test Template
+
+This template is for lab models such as Qwen3-Coder-Next Q3, not for `gpt-oss-120b Q4_K_M`.
+
+```bash
+B=external/llama.cpp/build/bin
+M=~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf
+mkdir -p moevm/runs
+
+$B/llama-bench -m "$M" -fa 1 -p 2048 -n 128 -r 3 --no-warmup -o md \
+  | tee moevm/runs/q3_bench.md
+
+# `llama-bench` uses -ncmoe / --n-cpu-moe rather than --cpu-moe.
+# To test MoE CPU placement for all 48 layers:
+$B/llama-bench -m "$M" -fa 1 -p 2048 -n 128 -r 3 --no-warmup -o md -ncmoe 48 \
+  | tee moevm/runs/q3_bench_ncpu_moe.md
+
+/usr/bin/time -l $B/llama-cli -m "$M" -ngl 99 -fa on -c 8192 \
+  -ctk q8_0 -ctv q8_0 --no-warmup -n 256 \
+  -p "Write a concise Python function that parses key=value lines." \
+  2>&1 | tee moevm/runs/q3_cli.log
+
+# `llama-cli` exposes -cmoe / --cpu-moe:
+/usr/bin/time -l $B/llama-cli -m "$M" -ngl 99 -fa on -c 8192 \
+  -ctk q8_0 -ctv q8_0 --no-warmup --cpu-moe -n 256 \
+  -p "Write a concise Python function that parses key=value lines." \
+  2>&1 | tee moevm/runs/q3_cli_cpu_moe.log
+```
+
+In parallel:
+
+```bash
+iostat -d disk0 1 | tee moevm/runs/q3_iostat.log
+vm_stat 5 | tee moevm/runs/q3_vmstat.log
+```
+
+Measure SSD random reads once a GGUF is downloaded:
+
+```bash
+python3 moevm/phase0/ssd_bench.py "$M" --size-mb 2 --threads 6
+```
+
+## MoE Route Tracing
+
+Local trace binary:
+
+```bash
+external/llama.cpp/build/bin/llama-moe-trace --help
+```
+
+Trace output format is JSONL:
+
+```json
+{"token":0,"layer":0,"experts":[12,44,91,103]}
+```
+
+Always run trace jobs through `safe_run.py`:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/<name>.log \
+  --summary moevm/runs/<name>.summary \
+  --max-seconds 600 \
+  --max-rss-mib 16000 \
+  -- external/llama.cpp/build/bin/llama-moe-trace \
+    --trace-out moevm/runs/<name>.jsonl \
+    -m /path/to/model.gguf \
+    -ngl 0 -c 512 -b 64 -ub 64 \
+    -p "def quicksort(arr):"
+```
+
+For trace correctness in v0, set `-b` equal to `-ub`. If llama.cpp internally splits a logical batch into smaller ubatches, the eval callback does not expose a reliable token offset. Traces produced with `-b 32 -ub 16` are invalid for per-token cache simulation unless repaired.
+
+Validation run:
+
+- Model: `$MOEVM_MODELS_DIR/moe-trace-lab/Mistral-7B-v0.3-2x-MoE-v1.Q2_K.gguf`
+- Mode: CPU-only, `-ngl 0`.
+- Prompt tokens traced: 5.
+- Records: 155.
+- Explanation: this model has 32 layers, but only layers 0-30 emitted `ffn_moe_topk`, so integrity is `tokens × routed_layers`, not `tokens × total_layers`.
+- Trace: `moevm/runs/mistral_2x_moe_trace.jsonl`.
+- Cache sim: `moevm/runs/mistral_2x_moe_cache_sim.json`.
+
+This lab model is not a useful MoEVM target because it has 2 active experts out of 2. It only validates the trace hook and downstream simulator.
+
+Qwen3-Coder-Next Q3 validation:
+
+- Model: `$MOEVM_MODELS_DIR/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf`
+- Mode: CPU-only, `-ngl 0 --no-repack`.
+- Correct trace runs use `-b 16 -ub 16`.
+- Summary: `moevm/runs/qwen3_next_q3_trace_summary.md`.
+- Observed routed layers: 47 (`layers 0-46`; layer 47 emitted no `ffn_moe_topk`).
+- Three short coding traces project about 20-23 sync tok/s with an 8GiB LRU arena under the current 5GB/s SSD assumption.
+
+Packed sidecar replay:
+
+- Plan: `moevm/runs/qwen3_next_q3_sidecar_plan.json`.
+- Packed file: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm`.
+- Records: 24,576 = 48 layers x 512 experts.
+- Payload: 31.35GiB.
+- Pack time: 31.71s, 0.99GiB/s.
+- Replay source-vs-packed at 8GiB arena:
+  - `code2_b16`: source 3.788s / 18.5 replay tok/s; packed 0.353s / 198.5 replay tok/s.
+  - `frontend1`: source 2.513s / 17.1 replay tok/s; packed 0.297s / 144.7 replay tok/s.
+  - `infra1`: source 2.463s / 15.8 replay tok/s; packed 0.293s / 132.9 replay tok/s.
+- This measures expert I/O replay only, not full inference speed.
+- Packed sidecar reduces miss read operations 3.0x by reading one contiguous `(layer, expert)` record instead of separate gate/up/down slices.
+- The packed GB/s figure is probably helped by OS/file-cache behavior despite `F_NOCACHE`; use the source-vs-packed elapsed improvement as the current signal.
+
+Native C++ pager replay:
+
+- Indexer: `moevm/phase0/sidecar_index.py`.
+- Index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.idx`, 393,272 bytes.
+- Source: `moevm/phase0/pager_replay.cpp`.
+- Binary: `moevm/phase0/pager_replay`.
+- Mode: sync `pread` from packed sidecar with the same LRU policy as Python.
+- Results at 8GiB arena:
+  - `code2_b16`: 0.336s, 208.1 replay tok/s, 31.70GB/s, hit 0.763.
+  - `frontend1`: 0.236s, 182.4 replay tok/s, 30.80GB/s, hit 0.737.
+  - `infra1`: 0.229s, 170.6 replay tok/s, 31.44GB/s, hit 0.714.
+- This still measures expert I/O replay only, not full model inference.
+
+Native async prefetch replay:
+
+- `pager_replay.cpp` now supports `--prefetch-window`, `--prefetch-threads`, `--prefetch-max-inflight-mib`, and `--compute-us-per-access`.
+- `compute-us-per-access` is synthetic overlap time. Use demand reads and wait time as the important signal; wall-time includes the artificial sleep.
+- Code trace, `window=47`, `inflight=64MiB`, `compute=5us/access`:
+  - 1 worker: 0.590s, hit 0.880, waits 3,953, wait 0.287s, 18.09GB/s.
+  - 2 workers: 0.415s, hit 0.951, waits 1,604, wait 0.104s, 25.70GB/s.
+  - 4 workers: 0.397s, hit 0.975, waits 820, wait 0.069s, 26.88GB/s.
+  - 8 workers: 0.441s, hit 0.977, waits 754, wait 0.067s, 24.21GB/s.
+- Selected profile for next work: `window=47`, `threads=4`, `inflight=64MiB`, `compute=5us/access`.
+- Selected profile results:
+  - `code2_b16`: 0.397s, 176.4 replay tok/s, hit 0.975, demand reads 1, prefetch reads 7,793, wait 0.069s.
+  - `frontend1`: 0.278s, 154.6 replay tok/s, hit 0.973, demand reads 1, prefetch reads 5,306, wait 0.046s.
+  - `infra1`: 0.258s, 151.0 replay tok/s, hit 0.969, demand reads 1, prefetch reads 5,250, wait 0.048s.
+- Interpretation: 4 `pread` workers are useful on this Mac; 8 workers did not improve the code trace. The useful next design is a small in-flight queue, not unbounded CPU fanout.
+
+Arena allocator model:
+
+- `pager_replay.cpp` now models resident expert storage with a 16KiB-aligned arena allocator.
+- It tracks arena offsets, evictions, free spans, high-water bytes, and resident record count.
+- It does not allocate the full 8GiB buffer yet; this is the allocator model before real resident buffers.
+- Selected async profile rerun with arena metrics:
+  - `code2_b16`: hit 0.978, wait 0.061s, evictions 1,551, arena high-water 8.00GiB, resident records 6,247, free spans 34, largest free span 1.30MiB.
+  - `frontend1`: hit 0.973, wait 0.046s, evictions 0, arena high-water 6.76GiB, resident records 5,307, free spans 1.
+  - `infra1`: hit 0.969, wait 0.048s, evictions 0, arena high-water 6.69GiB, resident records 5,251, free spans 1.
+- Interpretation: the 8GiB arena behaves cleanly on short traces. Code reaches the cap and evicts, but fragmentation is not pathological yet. Longer traces are still needed.
+
+Long trace predictor gate:
+
+- Long trace: `moevm/runs/qwen3_next_q3_trace_code_long1.jsonl`.
+- Prompt tokens: 633.
+- Records: 29,751.
+- Expert accesses: 297,510.
+- Trace mode: CPU-only, `-ngl 0 --no-repack -c 1024 -b 16 -ub 16`.
+- Trace runtime: 17.97s under `safe_run.py`.
+
+`pager_replay.cpp` realistic predictor flags:
+
+- `--prefetch-policy oracle`: future trace upper bound, not realistic.
+- `--prefetch-policy last-layer`: repeats recently seen experts per layer.
+- `--prefetch-policy freq-layer`: predicts frequent experts per layer.
+- `--prefetch-policy hybrid`: recent + frequent.
+- `--predictor-topk N`.
+- `--predictor-min-count N`.
+
+Long trace real sidecar reads:
+
+- 4GiB LRU: 34.108s, 18.6 replay tok/s, hit 0.517, demand reads 143,833, read 183.3GiB.
+- 4GiB hybrid min-count 5: 39.053s, 16.2 replay tok/s, hit 0.585, demand reads 123,396, prefetch reads 29,431, read 194.8GiB.
+- 8GiB LRU: 12.706s, 49.8 replay tok/s, hit 0.824, demand reads 52,289, read 66.7GiB.
+- 8GiB oracle: 5.450s, 116.1 replay tok/s, hit 0.895, demand reads 6, prefetch reads 52,371, read 66.8GiB, wait 2.134s.
+
+Verdict:
+
+- LRU + 8GiB arena is the strongest realistic baseline today.
+- The oracle result proves prefetch can roughly 2.3x the long-trace I/O replay if the runtime gets a good signal.
+- The first realistic predictors are rejected for now. At 4GiB, hybrid improves hit-rate but increases total reads and wall time. At 8GiB, it does not beat LRU.
+- Next predictor work needs route-logit/topk information from the current forward pass or a cheap learned layer-transition predictor, not just historical expert IDs.
+
+Router candidate trace:
+
+- Local `llama-moe-trace` now supports `--trace-candidates N`.
+- It captures `ffn_moe_argsort` candidate expert IDs in addition to `ffn_moe_topk`.
+- Candidate records are emitted as `{"kind":"candidates","token":...,"layer":...,"candidates":[...]}`.
+- Existing topk records keep the old format: `{"token":...,"layer":...,"experts":[...]}`.
+- Smoke file: `moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl`.
+- Smoke result: 13 prompt tokens, 611 topk records, 611 candidate records, 47 routed layers/token, 32 candidates/record.
+- Long candidate trace: `moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`.
+- Long candidate result: 633 prompt tokens, 29,751 topk records, 29,751 candidate records, 16 candidates/record, 35.28s trace runtime.
+
+Candidate trace command:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_trace_candidates_smoke.log \
+  --summary moevm/runs/qwen3_next_q3_trace_candidates_smoke.summary \
+  --max-seconds 180 \
+  --preflight-min-free-pct 50 \
+  --min-free-pct 20 \
+  --max-rss-mib 40000 \
+  --max-wired-gib 34 \
+  --max-log-mb 8 \
+  -- external/llama.cpp/build/bin/llama-moe-trace \
+    --trace-out moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
+    --trace-candidates 32 \
+    -m ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
+    -ngl 0 --no-repack -c 256 -b 16 -ub 16 \
+    -p "Implement a small Python task queue with retry scheduling and deterministic tests."
+```
+
+Candidate-aware replay:
+
+- `pager_replay.cpp` supports `--prefetch-policy candidates`, `--candidate-topk N`, and `--candidate-delay-us N`.
+- The candidate predictor uses current-layer router candidates before expert matmul. It is not an oracle and does not use future-token route data.
+- Long trace, 8GiB arena, real sidecar reads:
+  - LRU baseline: 12.703s, 49.8 replay tok/s, hit 0.824, demand reads 52,289, read 66.7GiB.
+  - Candidates top10, 4 workers, delay 0: 9.141s, 69.3 replay tok/s, hit 0.852, demand reads 29, prefetch reads 52,407, read 66.9GiB.
+  - Candidates top10, 4 workers, delay 10us: 9.245s, 68.5 replay tok/s, demand reads 20, read 66.9GiB.
+  - Candidates top10, 4 workers, delay 50us: 9.723s, 65.1 replay tok/s, demand reads 24, read 67.0GiB.
+  - Candidates top16, 4 workers, delay 0: 12.100s, 52.3 replay tok/s, demand reads 1, prefetch reads 104,708, read 133.5GiB.
+- Worker sweep at top10/delay0: 1 worker 12.883s, 2 workers 9.875s, 4 workers 9.182s, 8 workers 9.377s, 12 workers 9.534s.
+- Current selected candidate profile: `candidate_topk=10`, `prefetch_threads=4`, `prefetch_max_inflight_mib=64`, `candidate_delay_us=0`.
+- Result: candidate prefetch is the first realistic predictor that beats LRU on real sidecar reads, about 1.39x on the long trace.
+- Rejected: `candidate_topk=16`, because it doubles read traffic and causes 98,878 evictions without improving wall-time.
+
+Oracle prefetch simulation:
+
+- Tool: `moevm/phase0/prefetch_sim.py`.
+- This is an upper bound, not a real decoder guarantee.
+- At 8GiB arena, a 47-access lookahead nearly eliminates blocking demand reads on the three Qwen3Next Q3 traces:
+  - `code2_b16`: demand misses 7,792 -> 2; demand MB/token 152.364 -> 0.039.
+  - `frontend1`: demand misses 5,307 -> 1; demand MB/token 168.861 -> 0.032.
+  - `infra1`: demand misses 5,251 -> 1; demand MB/token 184.288 -> 0.035.
+- Total bytes stay roughly the same; prefetch changes when bytes are loaded, not how many useful records are needed.
+- Research implication: the key optimization is a realistic bounded prefetch signal, not raw SSD bandwidth alone.
+
+Sidecar commands:
+
+```bash
+python3 moevm/phase0/sidecar_plan.py \
+  --model ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
+  --tensors-json moevm/runs/qwen3_next_q3_tensors.json \
+  --out moevm/runs/qwen3_next_q3_sidecar_plan.json
+
+python3 moevm/phase0/sidecar_pack.py \
+  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+  --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+  --summary moevm/runs/qwen3_next_q3_pack_full.json \
+  --nocache \
+  --progress-every 2048
+
+python3 moevm/phase0/sidecar_replay.py \
+  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+  --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+  --budget-gib 8 \
+  --packed ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+  --nocache \
+  --out moevm/runs/qwen3_next_q3_replay_code2_b16_8g_packed.json
+```
+
+Native index + replay commands:
+
+```bash
+python3 moevm/phase0/sidecar_index.py \
+  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+  --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx
+
+clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
+  moevm/phase0/pager_replay.cpp \
+  -o moevm/phase0/pager_replay
+
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.log \
+  --summary moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.safe_summary \
+  --max-seconds 300 \
+  --preflight-min-free-pct 50 \
+  --min-free-pct 20 \
+  --max-rss-mib 2000 \
+  --max-log-mb 8 \
+  -- moevm/phase0/pager_replay \
+    --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
+    --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+    --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+    --budget-gib 8 \
+    --nocache \
+    --out moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.json
+```
+
+Async prefetch replay command:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.log \
+  --summary moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.safe_summary \
+  --max-seconds 300 \
+  --preflight-min-free-pct 50 \
+  --min-free-pct 20 \
+  --max-rss-mib 2000 \
+  --max-log-mb 8 \
+  -- moevm/phase0/pager_replay \
+    --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
+    --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+    --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+    --budget-gib 8 \
+    --prefetch-window 47 \
+    --prefetch-threads 4 \
+    --prefetch-max-inflight-mib 64 \
+    --compute-us-per-access 5 \
+    --nocache \
+    --out moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.json
+```
+
+Native runtime API smoke:
+
+- Source: `moevm/phase0/moevm_runtime.hpp`, `moevm/phase0/moevm_runtime.cpp`.
+- Smoke source: `moevm/phase0/runtime_smoke.cpp`.
+- Runtime replay source: `moevm/phase0/runtime_replay.cpp`.
+- Component indexer: `moevm/phase0/sidecar_component_index.py`.
+- Component index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.cidx`, 589,880 bytes.
+- Contract: `prefetch_candidates(layer, candidates)` then `wait_selected(layer, expert)` returns a resident record pointer in the RAM arena; `component_view(record, Gate/Up/Down)` returns tensor-specific slices inside that resident record.
+- Smoke result on the candidate trace: 10 selected experts, 10 served from prefetch, 0 demand reads, 0 evictions, 13,598,720 bytes high-water.
+- Component smoke result: `component_bytes == selected_bytes == 13,598,720`, proving `gate + up + down` views cover the resident record exactly.
+- `safe_run.py` was fixed to drain remaining stdout after very short processes exit, so smoke logs are now complete.
+- Bug caught and fixed: the first `.cidx` header writer used a 60-byte Python struct while C++ expected 56 bytes. The script now asserts header and entry sizes before writing.
+
+Build:
+
+```bash
+clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
+  moevm/phase0/moevm_runtime.cpp \
+  moevm/phase0/runtime_smoke.cpp \
+  -o moevm/phase0/runtime_smoke
+```
+
+Run:
+
+```bash
+python3 moevm/phase0/sidecar_component_index.py \
+  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+  --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx
+
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_runtime_smoke.log \
+  --summary moevm/runs/qwen3_next_q3_runtime_smoke.safe_summary \
+  --max-seconds 60 \
+  --preflight-min-free-pct 20 \
+  --min-free-pct 15 \
+  --max-rss-mib 1000 \
+  --max-wired-gib 34 \
+  --max-log-mb 8 \
+  -- moevm/phase0/runtime_smoke \
+    --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
+    --component-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx \
+    --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+    --trace moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
+    --arena-mib 64 \
+    --inflight-mib 16 \
+    --threads 2 \
+    --candidate-topk 10
+```
+
+Runtime replay build:
+
+```bash
+clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
+  moevm/phase0/moevm_runtime.cpp \
+  moevm/phase0/runtime_replay.cpp \
+  -o moevm/phase0/runtime_replay
+```
+
+Runtime replay long trace:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.log \
+  --summary moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.safe_summary \
+  --max-seconds 240 \
+  --preflight-min-free-pct 20 \
+  --min-free-pct 15 \
+  --max-rss-mib 14000 \
+  --max-wired-gib 34 \
+  --max-log-mb 8 \
+  -- moevm/phase0/runtime_replay \
+    --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
+    --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+    --trace moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl \
+    --budget-gib 8 \
+    --prefetch-max-inflight-mib 64 \
+    --prefetch-threads 4 \
+    --candidate-topk 10 \
+    --out moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.json
+```
+
+Runtime replay long result:
+
+- Internal replay elapsed: 9.386s.
+- Safe-run wall elapsed including setup: 10.11s.
+- Replay speed: 67.4 tok/s.
+- Read: 66.56GiB, 52,207 ops.
+- Demand reads: 23 ops / 33.65MiB.
+- Prefetch reads: 52,184 ops / 71.43GB.
+- Prefetch waits: 40,632, 9.208s total.
+- Demand miss rate: 0.0077%.
+- Prefetch wait rate: 13.66%.
+- Evictions: 46,207.
+- Arena high-water: 8.00GiB.
+- Memory stayed stable under `safe_run.py`.
+
+Comparison against `pager_replay.cpp` candidate top10:
+
+- `pager_replay`: 9.141s, 69.3 replay tok/s, 66.9GiB read.
+- `runtime_replay`: 9.386s, 67.4 replay tok/s, 66.56GiB read.
+- Runtime API overhead is about 2-3% on internal replay time, acceptable because this path uses a real RAM arena and returns resident pointers.
+- Metric caveat: `runtime_hit_rate` counts records after waiting for in-flight prefetch, so compare `demand_read_ops`, `demand_miss_rate`, `prefetch_wait_rate`, and wall-time against `pager_replay`, not raw hit-rate.
+
+Oracle prefetch command:
+
+```bash
+python3 moevm/phase0/prefetch_sim.py \
+  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+  --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+  --budget-gib 8 \
+  --windows 0,47,470,1880 \
+  --out moevm/runs/qwen3_next_q3_prefetch_code2_b16_8g.json
+```
+
+## Cache Simulator
+
+Expected trace JSONL format:
+
+```json
+{"token":0,"layer":0,"experts":[12,44,91,103,120,201,260,311,400,511]}
+```
+
+Run:
+
+```bash
+python3 moevm/phase0/cache_sim.py moevm/runs/router_trace.jsonl \
+  --slice-mb 1.90 --budgets 20,24,28 --bssd-gbps 5 --compute-ms 14 \
+  --json moevm/runs/cache_sim.json
+```
+
+## Kill Switches
+
+- Qwen3-Coder-Next quality does not beat or materially complement `qwen3-coder:30b`.
+- Q3 resident/near-resident is good enough, making Q4 paging unnecessary for this model.
+- SSD random 2MiB reads are below 3GB/s, or below 1.5GB/s as a hard stop.
+- Simulated hit-rate at 28GiB is too low for >=10 tok/s.
+- Q3 smoke test triggers memory pressure or Jetsam with Docker stopped.
+- Prefill is too slow for agentic repo tasks even if decode is acceptable.
+
+## Next Engineering Step
+
+Move from runtime replay to llama.cpp integration boundary:
+
+1. Use `ggml-backend.cpp`'s existing “copy only used experts” branch as the first integration point, because it already has selected expert IDs immediately before `MUL_MAT_ID` weight transfer.
+2. Replace source tensor slice reads for routed expert tensors with `wait_selected` plus `component_view(Gate/Up/Down)` when MoEVM is enabled.
+3. Keep LRU + 8GiB arena as the fallback baseline and candidate top10 as the current winning prefetch policy.
+4. Extend candidate records with scores/weights if IDs alone stall below the oracle gap.
+5. Integrate behind a local llama.cpp flag only after the boundary is mapped and protected by `safe_run.py`.
+
+## llama.cpp MoEVM Hook Status
+
+Implemented local hook:
+
+- Header: `external/llama.cpp/ggml/include/ggml-backend.h`
+- Backend: `external/llama.cpp/ggml/src/ggml-backend.cpp`
+- API: `ggml_backend_set_moe_weight_copy_callback(callback, user_data)`.
+- Behavior: if the callback handles selected expert copies, llama.cpp skips the normal host tensor slice copy. Without a callback, behavior is unchanged.
+
+MoEVM-enabled local example:
+
+- `external/llama.cpp/examples/moe-trace/moe-trace.cpp`
+- `external/llama.cpp/examples/moe-trace/CMakeLists.txt`
+- Build target: `llama-moe-trace`.
+
+Added local options:
+
+- `--moevm-index`
+- `--moevm-component-index`
+- `--moevm-sidecar`
+- `--moevm-arena-gib`
+- `--moevm-inflight-mib`
+- `--moevm-threads`
+- `--moevm-prefetch-topk`
+- `--moevm-copy-debug`
+- `--moevm-copy-mode async|memcpy`
+- `--moevm-cache`
+- `--moevm-nocache`
+- `--moevm-direct-mmap`
+- `--moevm-shadow-ids`
+- `--moevm-compact-layer <layer|all|-1>`
+- `--moevm-compact-k-max`
+
+CPU-only smoke:
+
+- Log: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.log`.
+- Trace: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.jsonl`.
+- Mode: `-ngl 0 --no-repack`.
+- Prompt tokens: 10.
+- Trace records: 940.
+- MoEVM prefetch records: 942.
+- Demand reads: 0.
+- Prefetch reads: 2,116.
+- Waits: 0.
+- Arena high-water: 1.00GiB.
+- Copy hook calls: 0, expected for CPU-only mode.
+
+Limited offload probe:
+
+- Log: `moevm/runs/qwen3_next_q3_llama_moevm_ngl4_smoke.log`.
+- Mode: `-ngl 4`.
+- Result: stopped by `safe_run.py` before decode.
+- Stop reason: wired memory exceeded 34GiB.
+- No trace records were produced.
+
+Working offload path:
+
+- Key env: `GGML_OP_OFFLOAD_MIN_BATCH=1`. The Metal default is 32, which keeps short `MUL_MAT_ID` decode steps on CPU.
+- Key llama.cpp args: `-ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --op-offload --no-repack`.
+- Keep mmap enabled for Qwen3Next Q3; `--no-mmap` would load the full GGUF expert tensors into RAM in addition to the MoEVM sidecar.
+- This mode keeps routed experts as CPU/mmap tensors for scheduler placement, runs selected expert matmuls on Metal, and replaces the normal selected-expert host copy with MoEVM sidecar component views.
+
+Lab MoE decode smoke:
+
+- Log: `moevm/runs/mistral_2x_moe_llama_moevm_decode3_hook.log`.
+- Mode: `GGML_OP_OFFLOAD_MIN_BATCH=1`, `-ngl 99`, expert tensors overridden to CPU, `--no-mmap`.
+- Generated 3 tokens at 1.37 tok/s.
+- Copy hook calls: 384.
+- Copy hook handled: 384.
+- Callback fallback: 0.
+
+Qwen3Next Q3 prompt + real decode:
+
+- Best stable command family:
+
+```bash
+python3 moevm/phase0/safe_run.py \
+  --log moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.log \
+  --summary moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.summary \
+  --max-rss-mib 44032 \
+  --max-wired-gib 40.5 \
+  --min-free-pct 5 \
+  --max-seconds 240 \
+  -- env GGML_OP_OFFLOAD_MIN_BATCH=1 \
+    external/llama.cpp/build/bin/llama-moe-trace \
+      -m ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
+      --trace-out moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.jsonl \
+      --trace-candidates 10 \
+      --moevm-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
+      --moevm-component-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx \
+      --moevm-sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
+      --moevm-arena-gib 1 \
+      --moevm-inflight-mib 128 \
+      --moevm-threads 8 \
+      --moevm-prefetch-topk 10 \
+      --moevm-copy-debug 0 \
+      -ngl 99 \
+      -ot '.*ffn_.*_exps.weight=CPU' \
+      --op-offload \
+      --no-repack \
+      -c 128 -b 16 -ub 16 -n 20 \
+      -p 'def add(a, b): return a + b'
+```
+
+- Prompt tokens: 10.
+- Generated tokens: 20.
+- Decode speed: 5.78 tok/s.
+- Copy hook calls: 3,024.
+- Copy hook handled: 3,024.
+- Callback fallback: 0.
+- Copied expert components: 35,613.
+- Copied bytes: 16.26GB.
+- Runtime demand reads: 0.
+- Runtime prefetch reads: 8,648.
+- Runtime waits: 1,496, 0.532s total.
+- Evictions: 7,893.
+- Arena high-water: 1.00GiB.
+- Backend normal fallback copies: 63.
+- Safe-run end wired: 32.30GiB.
+
+Short sweep:
+
+| Mode | Arena | Workers / in-flight | Decode speed | Demand reads | Normal fallback |
+|---|---:|---:|---:|---:|---:|
+| `-ngl 4` | 1GiB | 4 / 64MiB | 3.12 tok/s | 111 | 6,228 |
+| `-ngl 99` | 1GiB | 4 / 64MiB | 5.50 tok/s | 96 | 18 |
+| `-ngl 99` | 2GiB | 4 / 64MiB | 5.07 tok/s | 130 | 18 |
+| `-ngl 99` | 1GiB | 8 / 128MiB | 5.77 tok/s | 0 | 18 |
+| `-ngl 99` | 1GiB | 12 / 256MiB | 5.25 tok/s | 0 | 18 |
+
+Current verdict:
+
+- MoEVM has a working llama.cpp path for Qwen3Next Q3 on this Mac.
+- The runtime can serve selected routed expert components from the sidecar into Metal `MUL_MAT_ID` copies with zero callback fallback.
+- `-ngl 99` plus CPU expert tensor override is materially better than partial `-ngl 4`, because non-expert weights stay on Metal and normal scheduler copies nearly disappear.
+- `--moevm-copy-mode memcpy` is now the preferred copy path on this Apple Silicon setup. It writes directly into the host-visible Metal shared buffer and avoids the `ggml_backend_tensor_set_async` overhead.
+- `--moevm-cache` is now preferred for decode tests. macOS page cache is faster than `F_NOCACHE` for this access pattern, while explicit direct mmap remains slower.
+- Best measured 100-token setting: `--moevm-arena-gib 1 --moevm-inflight-mib 256 --moevm-threads 12 --moevm-prefetch-topk 10 --moevm-copy-mode memcpy --moevm-cache`.
+- Balanced setting: `--moevm-arena-gib 1 --moevm-inflight-mib 128 --moevm-threads 8 --moevm-copy-mode memcpy --moevm-cache`; it is almost as fast and uses fewer prefetch workers.
+- The next bottleneck is reducing copy volume and scheduler overhead, not proving feasibility.
+
+Parity check:
+
+- Tool: `moevm/phase0/compare_decode_logs.py`.
+- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode20_parity.log`.
+- MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode20_parity.log`.
+- Compare JSON: `moevm/runs/qwen3_next_q3_decode20_parity_compare.json`.
+- Baseline mode: same `GGML_OP_OFFLOAD_MIN_BATCH=1`, `-ngl 99`, expert CPU override, no MoEVM sidecar.
+- Baseline generated 20 tokens at 6.45 tok/s.
+- MoEVM generated 20 tokens at 5.30 tok/s in the parity run.
+- `same_tokens=true`.
+- Generated IDs:
+
+```text
+[198,750,1186,2877,11,293,1648,470,264,481,293,198,750,15602,2877,11,293,1648,470,264]
+```
+
+Optimization probes after parity:
+
+| Probe | Result | Verdict |
+|---|---:|---|
+| Copy-prefetch dedup by `(decode_base, layer, ids)` | `copy_prefetches` 3,024 -> 1,008, `copy_prefetch_skips` 2,016, 5.32 tok/s | Correct, but not a speed win; keep if code simplicity is acceptable. |
+| `--moevm-direct-mmap` sidecar | 3.08 tok/s, `same_tokens=true`, no arena reads | Slower; OS page faults are worse than explicit arena prefetch. Useful only as a negative baseline. |
+| Hook-only prefetch, `--moevm-prefetch-topk 0` | 5.03 tok/s, 5 demand reads, more waits | Slower; eval-callback candidate/topk prefetch still helps. |
+| `--moevm-copy-mode memcpy` with `F_NOCACHE` | 20 tokens at 8.29 tok/s, `same_tokens=true`, `memcpy_ops=35,613` | Big win; async tensor-set overhead was dominant. |
+| `--moevm-copy-mode memcpy --moevm-cache` | 20 tokens at 9.99 tok/s, `same_tokens=true` | Best short decode result; page cache beats `F_NOCACHE`. |
+| 100-token baseline vs best MoEVM | Baseline 8.10 tok/s; MoEVM 11.06 tok/s; `same_tokens=true` | Stable +36.5% decode gain over same placement without sidecar hook. |
+| 2GiB arena with memcpy/cache | 9.13 tok/s; fewer reads but higher wait | Rejected; larger arena is not automatically better here. |
+| 16 workers / 512MiB in-flight | 10.83 tok/s | Rejected; too much prefetch parallelism starts to cost. |
+
+Current best 100-token artifacts:
+
+- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode100_parity.log`.
+- Best MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_arena1_t12_i256.log`.
+- Compare JSON: `moevm/runs/qwen3_next_q3_decode100_memcpy_cache_arena1_t12_i256_compare.json`.
+- Result: `same_tokens=true`.
+- Baseline: 100 tokens in 12.345s, 8.10 tok/s.
+- MoEVM: 100 tokens in 9.041s, 11.06 tok/s.
+- MoEVM copied expert components: 150,813.
+- MoEVM copied bytes: 68.86GB.
+- Runtime demand reads: 0.
+- Runtime prefetch reads: 29,612.
+- Runtime waits: 6,725, 1.467s total.
+- Arena high-water: 1.00GiB.
+
+## Shadow IDs and Compact Tensor Milestones
+
+Fable review identified a graph-reuse hazard: if `node->src[0]` or `node->src[2]` is patched and not restored after a split compute, graph reuse can silently run the next token with stale expert tensors/IDs. The local hook now records original pointers and restores them after each split compute.
+
+Implemented flags:
+
+- `--moevm-shadow-ids`: allocate a backend shadow IDs tensor, copy original IDs into it, temporarily swap `node->src[2]`, then restore after compute.
+- `--moevm-compact-layer 0`: compact/remap only one layer, with all other layers using the validated sparse copy path.
+- `--moevm-compact-layer all`: compact/remap all decode layers; prompt/prefill currently falls back when IDs are not compatible with the compact path.
+- `--moevm-compact-k-max 64`: maximum compact expert slots.
+
+Validation results:
+
+| Mode | Log | Result | Notes |
+|---|---|---:|---|
+| Shadow IDs, graph reuse enabled | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids.log` | `same_tokens=true`, 8.86 tok/s | `shadow_ids_applied=14403`, `fallback=141`, `graph_patches=graph_patch_restores=14403`. |
+| Shadow IDs, `LLAMA_GRAPH_REUSE_DISABLE=1` | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids_no_reuse.log` | `same_tokens=true`, 8.59 tok/s | Confirms restore is not hiding a graph-reuse-only failure. |
+| Compact layer 0 | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_l0.log` | `same_tokens=true`, 8.91 tok/s | `compact_applied=300`, `fallback=3`; only layer 0 decode was compacted. |
+| Compact all decode layers | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_all.log` | `same_tokens=true`, 8.66 tok/s | `compact_applied=14403`, `fallback=141`; all decode MoE matmuls used compact weights/remapped IDs. |
+
+Interpretation:
+
+- Compact/shadow graph surgery is now correct at token-parity level across 100 generated tokens.
+- The compact path is intentionally slower today because it still recopies every selected expert each token and adds ID remap/tensor patch overhead.
+- The value of compact is architectural: it creates the exact mechanism needed for a persistent compact expert pool where only cache misses are copied.
+- Logits-delta checker is implemented in `moevm/phase0/compare_logits.py`.
+- Compact all decode with logits: `moevm/runs/qwen3_next_q3_decode20_compact_all_logits_compare.json`, `max_abs=0.0`, `argmax_match_count=20`.
+
+## Persistent Expert Pool Milestone
+
+`llama-moe-trace` now supports:
+
+- `--moevm-pool-layer <layer|all|-1>`
+- `--moevm-pool-capacity <slots>`
+
+The persistent pool keeps a small backend tensor per layer/component and remaps selected expert IDs into pool slots. Only slot misses are copied from the MoEVM sidecar. Patched `node->src[0]` and `node->src[2]` are restored after each split compute, same as compact.
+
+Validation results:
+
+| Mode | Log | Result | Notes |
+|---|---|---:|---|
+| Pool layer 0, cap64, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_l0_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 10.06 tok/s | First pool correctness checkpoint. |
+| Pool all, cap64, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 0.79 tok/s | Correct but too slow; Metal appears to pay for the larger `ne[2]=64` pool tensor. |
+| Pool all, cap10 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap10.log` | `same_tokens=true`, 11.65 tok/s | Best short sweep result. |
+| Pool all, cap11 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap11.log` | `same_tokens=true`, 11.17 tok/s | Fewer copies than cap10, but lower speed. |
+| Pool all, cap16 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap16.log` | `same_tokens=true`, 10.67 tok/s | Fewer copies but lower speed than cap10. |
+| Pool all, cap12 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap12.log` | `same_tokens=true`, 10.49 tok/s | Still slower than cap10. |
+| Pool all, cap10, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap10_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 11.01 tok/s | Current bit-exact pool proof. |
+| Pool all, cap10, 100 tokens | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap10.log` | `same_tokens=true`, 11.95 tok/s | New best result. |
+| Pool all, cap10, 100 tokens repeat | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap10_r2.log` | `same_tokens=true`, 11.76 tok/s | Confirms the gain is repeatable. |
+| Pool all, cap11, 100 tokens | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap11.log` | `same_tokens=true`, 11.81 tok/s | More hits than cap10, but slower overall. |
+| Pool all, cap10, 256 tokens | `moevm/runs/qwen3_next_q3_moevm_decode256_pool_all_cap10.log` | 11.74 tok/s | Stability run, `callback_fallback=0`, copied 107.05GB. |
+
+Current best 100-token comparison:
+
+- Baseline same placement without MoEVM: 8.10 tok/s, 12.345s.
+- Previous best MoEVM sparse copy: 11.06 tok/s, 9.041s, copied 68.86GB.
+- Persistent pool all cap10: 11.76-11.95 tok/s over two 100-token runs, best 8.371s, copied 42.66GB.
+- Gain vs baseline: about +47.5%.
+- Gain vs previous best MoEVM: about +8.0%.
+- Pool stats on the 100-token run: `pool_applied=14403`, `pool_fallback=141`, `pool_component_hits=57384`, `pool_component_misses=86646`, `pool_evictions=28402`.
+- Longer 256-token stability run stayed at 11.74 tok/s with `pool_applied=36867`, `callback_fallback=0`, and `high_water=1.00GiB`.
+
+Interpretation:
+
+- Pooling works and is bit-exact on the 20-token logits check.
+- Pool capacity must stay close to active experts per token on this Metal path. Larger pools reduce copy volume but can lose much more in `MUL_MAT_ID` compute overhead.
+
+## Qwen3-Coder-Next Q4 MoEVM Checkpoint
+
+Files:
+
+- GGUF: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/Qwen3-Coder-Next-Q4_K_M.gguf`, about 45GiB.
+- Sidecar plan: `moevm/runs/qwen3_next_q4_sidecar_plan.json`, 32MiB.
+- Packed sidecar: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm`, 43.69GiB.
+- Index: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.idx`, 384KiB.
+- Component index: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.cidx`, 576KiB.
+
+Safety fixes made before Q4 runtime:
+
+- `gguf_inspect.py` now streams GGUF headers instead of reading full GGUF files into RAM.
+- `safe_run.py` now blocks concurrent model I/O jobs by default.
+- `safe_run.py` now handles children that remain alive after `SIGKILL` without hanging or crashing.
+- `llama-model.cpp` / `llama-model-loader.cpp` now support sparse mmap Metal buffers. Tensors assigned to a default device buffer are grouped into offset ranges instead of mapping one giant `first..last` file span, so CPU-overridden routed experts are no longer included in the Metal no-copy buffer.
+
+Q4 inspection:
+
+- Architecture: `qwen3next`.
+- Layers: 48.
+- Experts: 512.
+- Active experts per token: 10.
+- Routed expert pool: 43.59GiB.
+- Resident non-routed estimate: 1.60GiB.
+- Average bytes per `(layer, expert)`: 1.82MiB.
+- Active expert bytes per token if all miss: 871.88MiB.
+
+Packing:
+
+- Command used `sidecar_pack.py --nocache` under `safe_run.py`.
+- Packed 24,576 records.
+- Payload: 43.69GiB.
+- Pack time: 42.07s.
+- Write throughput: 1.04GiB/s.
+
+Runtime findings:
+
+- Before the sparse mmap loader patch, `-ngl 99` with expert CPU override triggered Metal `kIOGPUCommandBufferCallbackErrorOutOfMemory` before a successful decode.
+- `-ngl 4` also triggers Metal OOM, even with `-fa off -nkvo` and `-b 1 -ub 1`.
+- `-ngl 0 --no-op-offload` runs but does not exercise the MoEVM copy hook.
+- Old working Q4 path: `-ngl 0 --op-offload -fa off -nkvo -b 1 -ub 1`, with expert tensors overridden to CPU and MoEVM pool enabled.
+- Current working Q4 path: `-ngl 99 --op-offload --no-repack -b 1 -ub 1`, default KV/Flash Attention behavior, expert tensors overridden to CPU and MoEVM pool enabled.
+
+Best current Q4 comparison:
+
+| Mode | Log | Decoded | tok/s | Notes |
+|---|---|---:|---:|---|
+| Baseline, same placement, no sidecar | `moevm/runs/qwen3_next_q4_baseline_decode100_ngl0_opoffload_b1.log` | 64 | 3.03 | EOG at 64/100. |
+| MoEVM pool cap10 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1.log` | 64 | 4.96 | `same_tokens=true`, `pool_fallback=0`. |
+| MoEVM pool cap64 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap64.log` | 64 | 5.10 | Lower copy volume, stable. |
+| MoEVM pool cap128 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap128.log` | 64 | 5.10 | Higher wired memory, no speed gain over cap64. |
+| MoEVM pool cap256 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap256.log` | 64 | 5.12 | Best measured; zero pool evictions, copied 12.66GB. |
+| Baseline `-ngl99 --op-offload`, sparse mmap | `moevm/runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | 92 | 4.24 | Same placement baseline for current MoEVM. |
+| MoEVM `-ngl99`, pool cap32, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap32_kvfaauto.log` | 92 | 12.39 | Correct but below cap64. |
+| MoEVM `-ngl99`, pool cap64, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap64_kvfaauto.log` | 92 | 13.08 | Pre-P0.b best. |
+| MoEVM `-ngl99`, pool cap128, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap128_kvfaauto.log` | 92 | 12.96 | Fewer copies, slightly slower and higher wired. |
+| MoEVM `-ngl99`, pool cap64, P0.b defer input wait prototype | `moevm/runs/qwen3_next_q4_p0b_notrace_cap64_n200.log` | 200 | 20.13 | Unguarded prototype; `same_tokens=true` vs pre-P0.b no-trace. |
+| MoEVM `-ngl99`, pool cap64, P0.b hardened defer input wait | `moevm/runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log` | 200 | 18.64 | Current mergeable best; epoch/pinning guard, `same_tokens=true`. |
+
+Cap256 comparison JSON:
+
+- `moevm/runs/qwen3_next_q4_decode100_ngl0_opoffload_b1_cap256_compare.json`
+- `same_tokens=true`.
+- Baseline: 64 tokens in 21.094s, 3.03 tok/s.
+- MoEVM: 64 tokens in 12.511s, 5.12 tok/s.
+- Speedup vs same placement baseline: about 1.69x.
+- `callback_fallback=0`.
+- `pool_applied=10629`, `pool_fallback=0`.
+- `pool_component_hits=86427`, `pool_component_misses=19863`, `pool_evictions=0`.
+- `copied_bytes=12659417088`.
+
+Current best sparse mmap comparison JSON:
+
+- `moevm/runs/qwen3_next_q4_decode100_ngl99_sparse_mmap_cap64_kvfaauto_compare.json`
+- `same_tokens=true`.
+- Baseline same placement: 92 tokens in 21.712s, 4.24 tok/s.
+- MoEVM: 92 tokens in 7.033s, 13.08 tok/s.
+- Speedup vs same placement baseline: about 3.08x.
+- `callback_fallback=0`.
+- `pool_applied=14661`, `pool_fallback=0`.
+- `pool_component_hits=112587`, `pool_component_misses=34023`, `pool_evictions=8269`.
+- `copied_bytes=21796110336`.
+- `normal_fallback=333`.
+
+P0.b deferred input wait:
+
+- Pre-P0.b site timing: `moevm/runs/qwen3_next_q4_site_timing_notrace_cap64_n200.log`, 200 tokens in 15.465s, 12.93 tok/s.
+- P0.b prototype run: `moevm/runs/qwen3_next_q4_p0b_notrace_cap64_n200.log`, 200 tokens in 9.934s, 20.13 tok/s.
+- P0.b hardened run: `moevm/runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log`, 200 tokens in 10.729s, 18.64 tok/s.
+- Token parity: `same_tokens=true` over all 200 generated IDs.
+- Hardened token parity: `same_tokens=true` vs both the prototype and fallback 200-token runs.
+- `split_input_wait_us`: 9,211,215 -> 698 prototype, 623 hardened.
+- `backend_sync_us`: 11,110,584 -> 4,769,352 prototype, 5,373,235 hardened.
+- Hardened counters: `defer_input_wait_skips=33456`, `defer_input_wait_disabled_events=0`, `pool_submit_epoch=33456`, `pool_completed_epoch=33453`, `pool_epoch_drains=11152`, `pool_forced_fences=0`.
+- Mechanism: MoEVM sets `defer_input_wait=1` for pool/compact mode. The backend delays the split input wait until a real fallback write to `input_cpy` is required; pool-patched `MUL_MAT_ID` inputs skip that drain entirely.
+- Guardrail: in deferred mode, the MoEVM callback returns `false` instead of doing a classic copy if pool/compact cannot patch the graph, so the backend falls back after performing the normal wait.
+- Hardening: defer is refused when scheduler events are active, pool slot eviction is guarded by explicit submit/completed epochs, and pool/compact shadow IDs are copied into graph-visible tensors only after all required fills succeed.
+- Stress probe: `moevm/runs/qwen3_next_q4_hardened_defer_on_cap16_n100.log`, pool cap16, 100 tokens in 6.187s, 16.16 tok/s, same first 100 IDs as cap64 reference, `pool_evictions=32637`, `pool_forced_fences=0`.
+- Deterministic pinning self-test: `external/llama.cpp/build/bin/llama-moe-trace --moevm-self-test-pool-pinning`, passed. It verifies that pinned slots are skipped during eviction and that advancing `completed_epoch` makes the retry plan succeed.
+- Delay/fence stress: `moevm/runs/qwen3_next_q4_delay_pinning_cap16_n50.log`, cap16, `--moevm-inject-delay-us 500`, one-shot `--moevm-test-force-pinned-fence`, 50 tokens in 21.059s, same first 50 IDs as hardened cap64 reference, `pool_forced_fences=1`, `pool_pinned_eviction_skips=16`, callback `delay_us=14818365`, runtime `delay_us=7421004`. This is a correctness stress, not a throughput number.
+
+P0.c dynamic-K pool:
+
+- Implementation: pool/compact now support logical K = `ids.ne[0] * ids.ne[1]` for `ub > 1`, while the capacity guard is applied to the deduplicated expert union (`expert_id_count`). If the unique union exceeds capacity, overflow falls back and increments `fallback_k_overflow`.
+- The IDs readback path now reads the full strided tensor span, and pool/compact remap walks both dimensions of the original `[k, n_tokens]` IDs tensor with source/destination strides.
+- Added pool fallback reason counters: shape, IDs read, allocation, shadow allocation/bytes, plan, remap, and fill.
+- Added deterministic stride-aware remap coverage to `--moevm-self-test-pool-pinning`.
+- `ub=1` gate: `moevm/runs/qwen3_next_q4_dynamick_ub1_cap64_n100.log`, 100 tokens in 5.178s, 19.31 tok/s, same first 100 IDs as the hardened reference, `fallback_k_overflow=0`, `pool_fallback=0`.
+- `ub=8` prefill gate: `moevm/runs/qwen3_next_q4_dynamick_long_ub8_cap128_n4_shadowfix.log`, 960-token prompt, 4 decode tokens in 0.206s, 19.38 tok/s, generated IDs `[31075,264,5670,11972]`, `fallback_k_overflow=0`, `pool_fallback=0`.
+- Bit-exact replacement check: `qwen3_next_q4_dynamick_long_ub8_cap128_n4.logits` vs `qwen3_next_q4_dynamick_long_ub8_cap128_n4_shadowfix.logits` has `max_abs=0.0`, `argmax_mismatch_count=0`.
+- Note: `ub=1` vs `ub=8` logits differ numerically (`max_abs=1.711`) while tokens/argmax match; the same delta exists on the old `ub=8` fallback, so it is not caused by dynamic-K remap.
+- Delay/fence `ub=8` stress: `moevm/runs/qwen3_next_q4_dynamick_long_ub8_delay_cap128_n2_rss65g.log`, 960-token prompt, delay max 500us, one-shot forced fence, same first two generated IDs `[31075,264]`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=89`, `fallback_k_overflow=0`, `pool_fallback=0`. Throughput is not meaningful because 65.48s of artificial delay was injected.
+
+P0.d Fable audit hardening:
+
+- Code branch: `codex/moevm-audit-fixes` in `external/llama.cpp`; P0.d code commit `db94a94`, tag `moevm-p0d-audit-hardened`.
+- Build gate: `cmake --build external/llama.cpp/build --target llama-moe-trace -j 8`, passed.
+- Runtime pinning: arena-backed `RecordView` now increments a per-record pin count and must be released by the caller; eviction skips pinned resident records. Direct mmap records remain no-op releases.
+- `moe-trace.cpp` uses RAII record guards around every `wait_selected()` result.
+- Shadow IDs are keyed by patch kind (`pool`, `compact`, `verbatim`), so a fallback path cannot reuse and overwrite a graph-visible shadow tensor from another mode.
+- Pool/compact weight tensors allocate one extra expert slot as over-read padding while graph-visible `ne[2]` remains the logical active capacity.
+- The backend callback contract now documents process-global scope, unregister-before-destroy, `false` with no mutation, and no `dst_tensor` writes while deferred input wait is active.
+- Deferred input wait is gated by `sched->n_copies == 1` and no split event; otherwise it falls back to normal waits and increments `defer_input_wait_disabled_events`.
+- Pool state is keyed by backend and buffer type, not just layer, so future multi-backend placement cannot share one LRU/epoch state accidentally.
+- Backend MoE copy stats now use internal relaxed atomic counters and the low-level backend timing hooks are gated, so non-MoEVM paths no longer pay unconditional `ggml_time_us()` calls.
+- `debug_remaining` is now an atomic claim counter and `MOEVM_FORCE_STATS=1` can force backend timing stats without registering a MoE callback. The public header documents that stats snapshots/resets are relaxed per-field diagnostics, not coherent transaction snapshots.
+- Direct-mmap runtime hits now update metrics and record generations under the runtime mutex.
+- MoEVM callback runtime failures now increment `runtime_errors`, log the first error immediately as `LOG_ERR`, and retain first/last messages under a mutex for final diagnostics.
+- Pool fill failures now unwind through the existing touched-slot rollback instead of returning from the middle of the fill loop.
+- `llama-moe-trace` now permits no-trace stock runs and respects `--ignore-eos` in normal and speculative loops, so long logits parity tests do not require trace JSON and can force fixed token counts.
+- `safe_run.py` now reads child output via nonblocking `os.read()` and fails closed after repeated `memory_pressure` failures.
+- Sidecar pack summaries include SHA-256. `sidecar_index.py` and `sidecar_component_index.py` can bind indexes to a `.moevm` payload by size + SHA-256 prefix; the runtime verifies these fields when present.
+- Q4 `.idx` and `.cidx` were regenerated with integrity fields:
+  - `moevm/runs/qwen3_next_q4_sidecar_index_integrity.log`, sidecar size `46909087744`, sha256 prefix24 `afbf1ec420fa72a8a5f4852d49fa4233c0d76875213ee123`.
+  - `moevm/runs/qwen3_next_q4_sidecar_component_index_integrity.log`, sha256 prefix16 `afbf1ec420fa72a8a5f4852d49fa4233`.
+- Smoke with integrity verification: `moevm/runs/qwen3_next_q4_audit_integrity_smoke_n1.log`, 1 token at 17.08 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `defer_input_wait_disabled_events=0`.
+- Second-pass smoke after atomic stats/runtime error cleanup: `moevm/runs/qwen3_next_q4_auditfix2_smoke_n1.log`, 1 token at 17.28 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+- Third-pass smoke after Fable nits: `moevm/runs/qwen3_next_q4_auditfix3_smoke_n1.log`, 1 token at 15.63 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+- Real-context run: `moevm/runs/qwen3_next_q4_p0d_c4096_ub8_cap128_n50.log`, `-c 4096`, 960-token prompt, 50 decode tokens in 2.285s, 21.88 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+- Long no-trace logits parity: stock `qwen3_next_q4_p0d_parity_stock_ignoreeos_n1024_v2.log` vs MoEVM `qwen3_next_q4_p0d_parity_moevm_cap128_ignoreeos_n1024.log`, 1024 rows, `max_abs=0.0`, `argmax_mismatch_count=0`, `token_mismatch_count=0`.
+- Jitter/fence logits stress: `qwen3_next_q4_p0d_jitter_delay_cap16_n50.log`, cap16, `--moevm-inject-delay-us 500`, `--moevm-test-force-pinned-fence`, 50 rows, `max_abs=0.0` vs no-delay cap16 reference, `pool_forced_fences=1`, `pool_pinned_eviction_skips=16`, `runtime_errors=0`.
+- `safe_run` nonblocking smoke: `moevm/runs/safe_run_audit_echo.summary`, process exited cleanly after emitting partial stdout without a newline.
+
+Fast hybrid non-MoEVM baseline:
+
+- `moevm/runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log`
+- Mode: `-ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --no-op-offload`.
+- Result: 100 tokens in 9.174s, 10.90 tok/s.
+- This does not exercise MoEVM, but it is an important baseline unlocked by sparse mmap.
+
+Interpretation:
+
+- This is the first Q4 checkpoint where `-ngl 99` runs without Metal OOM while preserving token parity against the same placement baseline.
+- The current bottleneck is no longer the giant `first..last` mmap span, the pre-copy split wait, or `ub > 1` pool fallback. The bottlenecks are readback/verification sync, callback/pool copy cost, graph patch split count, and speculative rollback overhead on Qwen3Next recurrent state.
+- The next R&D targets are graph-level pool integration to reduce split count, then recurrent-state rollback/partial sequence removal so speculative decode can avoid checkpoint save/restore costs.
+- The current Qwen3Next Q3 default pool capacity in `llama-moe-trace` is 10.
+
+DeepSpec / DFlash R&D note:
+
+- DeepSeek DeepSpec is a relevant speculative-decoding framework containing DSpark, DFlash, and Eagle3.
+- z-lab publishes `Qwen3-Coder-Next-DFlash`, a 0.5B DFlash drafter paired with `Qwen/Qwen3-Coder-Next`.
+- This is relevant because speculative verification can amortize MoEVM's fixed scheduler/readback costs across several accepted tokens.
+- The compatible GGUF drafter tested locally is `transmutator/Qwen3-Coder-Next-DFlash-GGUF:Q8_0`, a GGUF quant of `z-lab/Qwen3-Coder-Next-DFlash`.
+- Dynamic-K is now implemented and verified. The remaining local prerequisite for a real speedup is avoiding checkpoint-heavy rollback or using a drafter with much longer accepted blocks.
+
+Speculative rollback probe:
+
+- Log: `moevm/runs/qwen3_next_q4_spec_probe_qwen06b_q8_n32.log`.
+- Target: local `Qwen3-Coder-Next-Q4_K_M.gguf`, `-ngl 99`, routed experts on CPU, `--no-op-offload`.
+- Draft: `Qwen/Qwen3-0.6B-GGUF:Q8_0`, downloaded through llama.cpp HF cache.
+- Result: process exited successfully.
+- llama.cpp reported: `speculative decoding will use checkpoints (context does not support partial sequence removal)`.
+- Generation stats: encoded 11 prompt tokens, decoded 33 tokens, `n_draft=4`, `n_drafted=44`, `n_accept=22`, acceptance 50%.
+- Throughput was only 6.16 tok/s in this non-MoEVM probe, so this is not a performance result. It is a gating result: Qwen3Next speculative decode does not immediately fail; rollback is handled by checkpointing rather than partial sequence removal.
+
+MoEVM speculative probe:
+
+- Integration: `llama-moe-trace` now supports `--moevm-speculative` and the normal llama.cpp `--spec-*` flags. The target model runs through the MoEVM sidecar callback; the draft model is loaded separately.
+- DFlash fix: draft contexts now receive `ctx_other=ctx_tgt`, and the loop calls `common_speculative_process()` after each target decode so DFlash can inject target hidden states into the draft KV cache.
+- Empty-draft guard: if a high `p_min` causes no draft tokens to be produced, the loop no longer calls `common_speculative_accept()` with a null last implementation.
+- Same-prompt non-spec baseline:
+  - `moevm/runs/qwen3_next_q4_moevm_normal_sameprompt_n32.log`, 32 tokens in 2.095s, 15.28 tok/s.
+  - `moevm/runs/qwen3_next_q4_moevm_normal_sameprompt_n100.log`, 100 tokens in 5.764s, 17.35 tok/s.
+- Qwen3-0.6B Q8 draft-simple matrix on the same prompt:
+  - `draft1`: `qwen3_next_q4_moevm_spec_qwen06b_q8_draft1_n32.log`, 34 tokens in 2.537s, 13.40 tok/s, accept 100%.
+  - `draft2`: `qwen3_next_q4_moevm_spec_qwen06b_q8_draft2_n32.log`, 33 tokens in 2.803s, 11.77 tok/s, accept 76.92%.
+  - `draft4`: `qwen3_next_q4_moevm_spec_qwen06b_q8_n32.log`, 33 tokens in 3.104s, 10.63 tok/s, accept 50%.
+  - `draft8`: `qwen3_next_q4_moevm_spec_qwen06b_q8_draft8_n32.log`, 33 tokens in 4.533s, 7.28 tok/s, accept 25%.
+- DFlash Q8 matrix on the same prompt:
+  - `draft8 p_min=0.0`: `qwen3_next_q4_moevm_spec_dflash_q8_draft8_n32_process.log`, 33 tokens in 4.041s, 8.17 tok/s, accept 25%.
+  - `draft8 p_min=0.2`: `qwen3_next_q4_moevm_spec_dflash_q8_draft8_pmin02_n32.log`, 34 tokens in 3.474s, 9.79 tok/s, accept 40.39%.
+  - `draft8 p_min=0.5`: `qwen3_next_q4_moevm_spec_dflash_q8_draft8_pmin05_n32_guard.log`, 33 tokens in 2.380s, 13.86 tok/s, accept 76.19%.
+  - `draft15 p_min=0.5`: `qwen3_next_q4_moevm_spec_dflash_q8_draft15_pmin05_n32.log`, 33 tokens in 2.722s, 12.12 tok/s, accept 69.57%.
+  - `draft8 p_min=0.5`, longer run: `qwen3_next_q4_moevm_spec_dflash_q8_draft8_pmin05_n100.log`, 101 tokens in 5.536s, 18.24 tok/s, accept 81.71%, `pool_fallback=0`, `fallback_k_overflow=0`.
+- Audit rerun:
+  - Normal cap64: `qwen3_next_q4_audit_normal_cap64_n100.log`, 100 tokens in 5.631s, 17.76 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`.
+  - Normal cap128: `qwen3_next_q4_audit_normal_cap128_n100.log`, 100 tokens in 5.492s, 18.21 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`.
+  - DFlash cap64: `qwen3_next_q4_audit_spec_dflash_cap64_draft8_pmin05_n100.log`, 101 tokens in 7.068s, 14.29 tok/s, accept 81.71%, `fallback_k_overflow=39`; cap64 is too small for this verification shape.
+  - DFlash cap128: `qwen3_next_q4_audit_spec_dflash_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.031s, 20.08 tok/s, accept 81.71%, `pool_fallback=0`, `fallback_k_overflow=0`.
+- Verdict: speculation is integrated and correct enough to benchmark. On short `n=32`, checkpoint/draft overhead loses to non-spec. On audited `n=100`, DFlash cap128 is a real but still modest win over same-prompt non-spec: 20.08 vs 18.21 tok/s (+10.3%). Cap64 should not be used for DFlash because fallback dominates.
+- Interpretation: DFlash needs enough generation length, cap128 pool capacity, and a conservative `p_min` to amortize checkpoint/draft overhead. Bigger gains need better accepted length, lower checkpoint overhead, or a non-checkpoint rollback path for Qwen3Next recurrent state.
+
+Rejected experiment:
+
+- Dense resident cache using llama.cpp's original `input_cpy` tensor was tested as `--moevm-resident-cache-unsafe`.
+- It was fast on 20 tokens, 13.65 tok/s, and reduced copied bytes to 3.75GB, but it failed token parity: generated IDs became `[198,0,0,...]`.
+- Token compare: `moevm/runs/qwen3_next_q3_decode20_resident_cache_keyed_token_compare.json`, `same_tokens=false`.
+- Interpretation: the scheduler copy buffer cannot be treated as durable resident expert storage across splits. The safe production path remains graph-restored compact/pool tensors.
+
+## Full-Resident Speed Check
+
+Question: if Qwen3Next Q3 fits on the Mac, why is MoEVM only at 11-12 tok/s?
+
+Result: full-resident llama.cpp/Metal is much faster than the MoEVM paging path.
+
+- Command log: `moevm/runs/qwen3_next_q3_fullresident_llamabench_decode128.log`
+- Model reported by `llama-bench`: `qwen3next 80B.A3B Q3_K - Medium`.
+- Model size: 36,276,696,064 bytes.
+- Params: 79,674,391,296.
+- Placement: `-ngl 99`, `n_cpu_moe=0`, no tensor overrides.
+- Prompt eval: 178.83 tok/s for 16 prompt tokens.
+- Generation: 49.69 tok/s for 128 generated tokens.
+- Safe-run memory: end wired 31.36GiB.
+
+Interpretation:
+
+- The public 25-30 tok/s expectation is plausible; this local full-resident run is even faster on a synthetic bench.
+- The 11-12 tok/s MoEVM result is not the raw model limit. It is the current cost of the paging architecture: sidecar reads, expert copies, remapped compact pool tensors, scheduler graph patches, and trace callbacks.
+- MoEVM is still valuable for models/quantizations that do not fit full-resident, or for proving expert-paging mechanics. For this exact Q3 model, full resident is the performance baseline to beat, not 8.10 tok/s.
+
+## Code Bench Smoke
+
+`llama-moe-trace` now supports `--generated-out <path>`, so benchmark harnesses can score generated text instead of only token IDs.
+
+Local harness:
+
+- Script: `moevm/phase0/code_bench.py`
+- Summary: `moevm/runs/codebench_smoke/summary.md`
+- JSON: `moevm/runs/codebench_smoke/summary.json`
+
+Smoke result over three small Python tasks:
+
+- Baseline same CPU-expert placement: 2/3 passed, 7.95 tok/s average.
+- MoEVM pool cap10: 2/3 passed, 10.85 tok/s average.
+- Pool generated exactly the same tokens and text as baseline on all 3 tasks.
+- The failed task is a model/prompt quality miss on relative Unix paths, not a MoEVM divergence.
