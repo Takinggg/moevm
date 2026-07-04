@@ -2,6 +2,8 @@
 
 Date: 2026-07-04
 
+Updated: 2026-07-05 with cold-replay caveat, 512-token traces, and Belady cache bounds.
+
 Machine: MacBook Pro M5 Pro, 48GB RAM.
 
 ## Safety
@@ -63,9 +65,11 @@ Decode-only window starts after prompt token 67.
 | 28 GiB | LRU | 0.924 | 138.2 | 24.02 | 36.19 |
 | 32 GiB | LRU | 0.947 | 95.6 | 30.20 | 52.31 |
 
+`cache_sim.py` now also supports `belady`, an offline-optimal eviction policy. Belady is not deployable online; it gives the upper bound for what a better cache/prefetch policy could extract from the same trace.
+
 ## Packed Replay
 
-No-prefetch Python replay over prompt+decode:
+No-prefetch Python replay over prompt+decode. These replay tok/s numbers are page-cache sensitive and should not be used as cold-SSD claims.
 
 | Pool | Hit Rate | Reads | Read GiB | Replay tok/s |
 |---:|---:|---:|---:|---:|
@@ -89,12 +93,175 @@ Best current point: 28 GiB arena, candidate top4, 4 prefetch threads, 64 MiB in-
 
 `--no-integrity-check` keeps size checks but skips the full sidecar SHA read after the sidecar has already been validated. It reduces the 28 GiB/top4 safe-run wall time from about 28s to 5.57s while preserving the same internal replay behavior.
 
+Cold-replay caveat:
+
+- `sudo purge` could not be run non-interactively on this machine, so a true cold page-cache replay is not available from this pass.
+- A best-effort eviction read of the Qwen Q4 GGUF before replay still produced 46.22 replay tok/s while reading 44.54 GiB. That remains too cache/storage-dependent to publish as a cold result.
+- Public claim should use replay throughput only as warm-runtime evidence. The defensible result is the demand-read behavior and cache locality, not the 46-50+ replay tok/s number.
+
+## Long Traces
+
+Three 512-token coding traces were collected CPU-only with gpt-oss Metal still disabled:
+
+| Trace | Prompt Tok | Gen Tok | CPU Decode tok/s | Records | Expert Accesses |
+|---|---:|---:|---:|---:|---:|
+| Python backend | 47 | 512 | 14.18 | 40,156 | 80,312 |
+| TypeScript type utility | 48 | 512 | 13.77 | 40,226 | 80,452 |
+| Rust tokenizer | 51 | 512 | 14.36 | 40,436 | 80,872 |
+
+Decode-only LRU vs Belady cache bounds:
+
+| Trace | Pool | LRU Hit | LRU Miss MB/tok | LRU Sync tok/s est | Belady Hit | Belady Sync tok/s est | 512-token Working Set |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Python | 16 GiB | 84.97% | 273.6 | 14.55 | 93.44% | 26.41 | 41.49 GiB |
+| Python | 24 GiB | 93.28% | 122.3 | 26.00 | 96.78% | 38.88 | 41.49 GiB |
+| Python | 28 GiB | 95.32% | 85.3 | 32.20 | 97.42% | 42.74 | 41.49 GiB |
+| TypeScript | 16 GiB | 85.86% | 257.3 | 15.27 | 93.32% | 26.09 | 42.27 GiB |
+| TypeScript | 24 GiB | 93.26% | 122.7 | 25.95 | 96.62% | 38.01 | 42.27 GiB |
+| TypeScript | 28 GiB | 95.10% | 89.2 | 31.41 | 97.15% | 41.05 | 42.27 GiB |
+| Rust | 16 GiB | 84.16% | 288.3 | 13.95 | 93.27% | 25.97 | 39.98 GiB |
+| Rust | 24 GiB | 93.63% | 116.0 | 26.88 | 96.92% | 39.64 | 39.98 GiB |
+| Rust | 28 GiB | 95.75% | 77.3 | 33.93 | 97.49% | 43.23 | 39.98 GiB |
+
+Research conclusion: LRU is quasi-optimal on these coding traces. The 28 GiB gap between LRU and offline-optimal Belady is only about 1.7-2.1 hit-rate points, so new online cache policies are unlikely to repay their engineering cost for this workload. Future work should focus on prefetch timing, compute/orchestration, and pressure-triggered trimming rather than S3-FIFO/LFU-style policy swaps.
+
+Runtime replay at 28 GiB/candidate top4 on the same long traces:
+
+| Trace | Tokens | Demand Reads | Read GiB | Evictions | Arena High Water | Replay tok/s |
+|---|---:|---:|---:|---:|---:|---:|
+| Python | 559 | 1 | 64.92 | 3,000 | 27.99 GiB | 89.11 |
+| TypeScript | 560 | 0 | 66.28 | 3,111 | 27.99 GiB | 88.12 |
+| Rust | 563 | 0 | 61.64 | 2,734 | 27.99 GiB | 94.82 |
+
+These replay tok/s numbers are warm-cache internal-runtime numbers. The important result is that candidate top4 prefetch gives 0, 0, and 1 demand read across about 241k expert accesses.
+
+## Reclaim/Trim Guard
+
+On macOS, the runtime now uses `MADV_FREE_REUSABLE` on evicted full pages and `MADV_FREE_REUSE` before writing into them again. New metrics:
+
+- `arena_reclaim_advises`
+- `arena_reclaim_bytes`
+- `arena_reclaim_live_bytes`
+- `arena_reuse_advises`
+- `arena_reuse_bytes`
+
+Smoke checks on the Python long trace, 160 tokens, run sequentially:
+
+| Pool | Demand Reads | Evictions | Cumulative Reclaim GiB | Live Reclaim GiB | Arena High Water | Replay tok/s | safe_run End Wired |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 GiB | 4 | 3,800 | 46.79 | 0.00 | 16.00 GiB | 22.81 | 2.79 GiB |
+| 20 GiB | 2 | 2,440 | 30.05 | 0.00 | 20.00 GiB | 29.46 | 2.79 GiB |
+| 24 GiB | 0 | 1,125 | 13.85 | 0.00 | 24.00 GiB | 40.90 | 2.80 GiB |
+
+The cumulative reclaim number is not the pressure-relief metric. On normal replay, evicted slots are immediately reused, so `arena_reclaim_live_bytes` returns to zero. The real pressure guard is explicit trimming.
+
+`Runtime::trim_to_bytes(target_used_bytes)` evicts LRU records without replacing them, leaving pages marked reusable. Footprint validation on the same 16 GiB replay held alive after completion:
+
+| Mode | Runtime Used | Live Reclaim | `footprint` Reclaimable | `phys_footprint` | Peak |
+|---|---:|---:|---:|---:|---:|
+| No trim | 16.00 GiB | 0.00 GiB | 0.00 GB | 17.19 GB | 17.19 GB |
+| Trim to 8 GiB | 7.99 GiB | 8.00 GiB | 8.59 GB | 8.60 GB | 17.19 GB |
+
+So `MADV_FREE_REUSABLE` does decrement the relevant footprint ledger when paired with an actual trim. For gpt-oss Metal, the safety mechanism should be pressure-triggered trim/shrink; eviction-only advice is not enough.
+
+`safe_run.py` now keeps gpt-oss Metal blocked by default and exposes narrow explicit gates:
+
+- `--allow-gptoss-metal-smoke`: `-n <= 8`, MoEVM arena <= 16 GiB.
+- `--allow-gptoss-metal-parity-gate`: `-n <= 128`, MoEVM arena <= 16 GiB.
+- `--allow-gptoss-metal-scale-gate`: `-n <= 128`, MoEVM arena <= 24 GiB, and `--moevm-pressure-trim` is mandatory above 16 GiB.
+
+`llama-moe-trace` now has an opt-in Darwin memory-pressure listener. With `--moevm-pressure-trim`, `DISPATCH_MEMORYPRESSURE_WARN` trims the runtime arena down by one configured step, and `CRITICAL` trims by two steps, bounded by `--moevm-pressure-trim-min-gib`. Pressure events and reclaimed bytes are logged as `MoEVM pressure_trim ...`.
+
+## Metal Smoke
+
+Prerequisites checked:
+
+- `llama-moe-trace` was rebuilt after the runtime reclaim/trim changes.
+- The sparse-mmap loader content is present (`llama_buf_map_find` and post-load `unmap_fragment` of unused mmap ranges).
+- `--moevm-load-only` was added so a true load-only smoke can skip prompt prefill/decode.
+- gpt-oss `ADD_ID` nodes remain unpatched by graph-pool; only `MUL_MAT_ID` pool nodes are rewritten.
+
+Load-only smoke:
+
+- Command shape: `-ngl 99`, expert weights overridden to CPU, `--no-op-offload`, `--no-repack`, `-fa off`, `--moevm-graph-mode pool`, arena 16 GiB, pool cap16, `--moevm-load-only`.
+- Result: pass, no decode, graph-mode installed on `MTL0`, safe-run end wired 3.49 GiB.
+
+First decode smoke, same prompt as CPU baseline, `-n 8`:
+
+| Run | Placement | Tokens | Decode tok/s | Generated IDs | Result |
+|---|---|---:|---:|---|---|
+| CPU baseline | `-ngl 0 --device none` | 8 | 5.74 | `[279,1314,57388,6271,11,287,3127,622]` | Reference CPU |
+| Metal baseline | `-ngl 99`, expert weights CPU | 8 | 4.65 | `[279,1314,71973,6271,11,287,3127,622]` | Metal placement reference |
+| MoEVM graph pool | `-ngl 99`, sidecar pool cap16 | 8 | 8.71 | `[279,1314,71973,6271,11,287,3127,622]` | Smoke pass vs Metal baseline |
+
+Short logits comparisons:
+
+- CPU baseline vs MoEVM: 1 token/argmax mismatch at row 2, `max_abs=5.33`. This is not a MoEVM-only failure because CPU baseline vs Metal baseline shows the same token/argmax mismatch.
+- Metal baseline vs MoEVM: 0 token mismatches, 0 argmax mismatches, `max_abs=1.36`, `mean_abs=0.0705`. This is not bit-exact, likely because the baseline uses CPU expert matmuls while MoEVM copies selected experts into Metal pool tensors.
+
+Same-backend parity gate:
+
+| Run | Placement | Tokens | Decode tok/s | Result |
+|---|---|---:|---:|---|
+| Metal op-offload baseline | `-ngl 99`, experts CPU, `--op-offload`, `--no-repack` | 64 | 2.84 | Slow same-compute reference |
+| MoEVM graph pool | `-ngl 99`, sidecar pool cap16 | 64 | 11.54 | `demand_reads=0`, `runtime_errors=0` |
+
+Logits comparison, op-offload Metal baseline vs MoEVM graph pool:
+
+- Rows: 64.
+- Token mismatches: 0.
+- Argmax mismatches: 0.
+- `max_abs=0.0`, `mean_abs=0.0`, `rms_abs=0.0`.
+
+Smoke/parity verdict: gpt-oss-120b Q4 now runs a bounded Metal/MoEVM decode on the Mac without jetsam/watchdog. The CPU-vs-Metal drift is real, but at backend-equal placement MoEVM is bit-exact over 64 decoded tokens, so the gpt-oss `ADD_ID` bias path is not currently corrupted by graph-pool.
+
+## Metal Scale
+
+All runs below use FlashAttention off, expert weights overridden to CPU in the source model, MoEVM graph pool, `--moevm-pressure-trim`, and `safe_run.py`.
+
+Short prompt, `c=128`, `n=64`, same op-offload baseline logits:
+
+| Arena | Decode tok/s | Demand Reads | Runtime Evictions | Arena Used | Pressure Events | Logits vs op-offload |
+|---:|---:|---:|---:|---:|---:|---|
+| 16 GiB | 11.44 | 0 | 511 | 16.00 GiB | 0 | `max_abs=0.0` |
+| 20 GiB | 13.34 | 0 | 35 | 20.00 GiB | 0 | `max_abs=0.0` |
+| 24 GiB | 13.24 | 0 | 0 | 20.38 GiB | 0 | `max_abs=0.0` |
+
+The 24 GiB short-prompt run only used 20.38 GiB, so the 20->24 delta is not meaningful on that workload.
+
+Real-context prompt, `c=4096`, 990 prompt tokens from `prompt_observability_512plus.txt`, `n=128`:
+
+| Mode | Arena | Batch | Wall s | Decode tok/s | Demand Reads | Prefetch Reads | Wait s | Runtime Evictions | Logits |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| MoEVM | 16 GiB | `b=1 ub=1` | 86.99 | 9.37 | 11 | 18,764 | 19.42 | 17,476 | Reference |
+| MoEVM | 24 GiB | `b=1 ub=1` | 76.42 | 9.94 | 0 | 5,279 | 6.80 | 3,330 | `max_abs=0.0` vs 16 GiB |
+| MoEVM | 24 GiB | `b=4 ub=4` | 64.05 | 10.19 | 360 | 5,070 | 5.49 | 3,481 | Batch mode |
+
+Interpretation:
+
+- Larger arena fixes most I/O pressure on real context: demand reads 11 -> 0 and runtime wait 19.42s -> 6.80s.
+- Throughput improves only modestly because scheduler/readback orchestration dominates once I/O is controlled.
+- Timestamp diagnostic on `24 GiB`, `b=1 ub=1`, same real context, `n=64`: wall 71.88s, `metal_gpu_busy_us=20.07s`, `ids_readback_us=25.79s`, `callback_us=29.18s`, `backend_sync_us=26.73s`. This points to rendez-vous/ids readback rather than raw GPU compute as the next bottleneck.
+- `b=4 ub=4` is bit-exact against same-backend op-offload over 16 rows (`max_abs=0.0`) and improves full-run wall time, but it does not reproduce the `b=1 ub=1` token stream. Use it as a batch/prefill mode, not as a bit-identical replacement for `b=1`.
+- `b=8 ub=8` with pool cap16 fails safely at graph fill with `fallback_k_overflow=1`: the top-k union exceeds pool capacity. Cap32+ is a separate memory-risk experiment, not yet validated.
+
+## Graph/ADD_ID Check
+
+gpt-oss has per-expert bias tensors that use `GGML_OP_ADD_ID`. The current graph-pool path does not patch those nodes:
+
+- Build-time `moevm_graph_transform_cb` returns early unless `node->op == GGML_OP_MUL_MAT_ID`.
+- Scheduler graph-pool dispatch uses `ggml_backend_moe_is_graph_pool_node()`, which also requires `GGML_OP_MUL_MAT_ID` and a `moevm_pool_` weight tensor.
+- The legacy sparse-copy hook rejects first nodes that are not `GGML_OP_MUL_MAT_ID`; its existing comment says `GGML_OP_ADD_ID` weights are not split.
+
+So the current gpt-oss-specific invariant is: MoEVM may rewrite routed expert matrix multiply weights and their shadow ids, but it must leave `ADD_ID` bias ids untouched.
+
 ## Interpretation
 
-This validates the core MoEVM thesis on a model larger than RAM: the runtime can serve a 56.88 GiB routed expert pool using a bounded 28 GiB arena and load only selected experts. The test is not yet full gpt-oss Metal inference; it is the paging/runtime proof that avoids the known unsafe gpt-oss Metal path on this Mac.
+This validates the core MoEVM thesis on a model larger than RAM: the runtime can serve a 56.88 GiB routed expert pool while loading only selected experts, and the first bounded Metal decode is bit-exact against a same-backend reference.
 
 Next gates:
 
-1. Get a longer gpt-oss trace, ideally 1k-5k generated tokens or multiple real coding prompts.
-2. Re-run runtime replay at 24/28 GiB on the longer traces.
-3. Only attempt full inference after a safer gpt-oss Metal strategy exists, or on a machine with more unified memory.
+1. Decide whether to pursue cap32 for `ub=8`; do it only behind a new narrower safe-run gate and a load/decode smoke.
+2. Optimize the graph-pool rendez-vous path: fewer ids readbacks/callbacks matter more than larger arenas now.
+3. Run a longer soak after the next scheduler change.
+4. Do not publish replay tok/s as a cold SSD number until a real `sudo purge` or reboot-cold protocol is run.

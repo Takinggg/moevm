@@ -10,6 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -26,6 +27,8 @@ struct Options {
     uint32_t threads = 4;
     size_t candidate_topk = 10;
     int max_tokens = -1;
+    double trim_gib_after_replay = -1.0;
+    double hold_seconds_after_replay = 0.0;
     bool nocache = true;
     bool verify_integrity = true;
 };
@@ -38,6 +41,7 @@ struct ReplayMetrics {
     uint64_t selected_bytes = 0;
     uint64_t missing_candidates = 0;
     uint64_t missing_index = 0;
+    uint64_t trim_evictions_after_replay = 0;
     double elapsed_s = 0.0;
 };
 
@@ -54,6 +58,8 @@ void usage(const char *argv0) {
         << "  --prefetch-threads N            default 4\n"
         << "  --candidate-topk N              default 10\n"
         << "  --max-tokens N                  default all\n"
+        << "  --trim-gib-after-replay N       evict arena down to this used size before metrics\n"
+        << "  --hold-seconds-after-replay N   keep process alive after replay for footprint inspection\n"
         << "  --no-nocache                    do not request F_NOCACHE\n"
         << "  --no-integrity-check            verify sidecar size only, not SHA prefix\n"
         << "  --out PATH                      write JSON summary\n";
@@ -85,6 +91,10 @@ Options parse_args(int argc, char **argv) {
             opt.candidate_topk = static_cast<size_t>(std::stoul(need(a)));
         } else if (a == "--max-tokens") {
             opt.max_tokens = std::stoi(need(a));
+        } else if (a == "--trim-gib-after-replay") {
+            opt.trim_gib_after_replay = std::stod(need(a));
+        } else if (a == "--hold-seconds-after-replay") {
+            opt.hold_seconds_after_replay = std::stod(need(a));
         } else if (a == "--out") {
             opt.out_path = need(a);
         } else if (a == "--no-nocache") {
@@ -220,6 +230,7 @@ std::string to_json(const Options &opt, const ReplayMetrics &r, const moevm::Run
     os << "  \"selected_bytes\": " << r.selected_bytes << ",\n";
     os << "  \"missing_candidates\": " << r.missing_candidates << ",\n";
     os << "  \"missing_index\": " << r.missing_index << ",\n";
+    os << "  \"trim_evictions_after_replay\": " << r.trim_evictions_after_replay << ",\n";
     os << "  \"runtime_hits\": " << m.hits << ",\n";
     os << "  \"runtime_misses\": " << m.misses << ",\n";
     os << "  \"runtime_hit_rate\": " << hit_rate << ",\n";
@@ -245,6 +256,11 @@ std::string to_json(const Options &opt, const ReplayMetrics &r, const moevm::Run
     os << "  \"arena_resident_records\": " << m.arena_resident_records << ",\n";
     os << "  \"arena_free_spans\": " << m.arena_free_spans << ",\n";
     os << "  \"arena_largest_free_span_bytes\": " << m.arena_largest_free_span_bytes << ",\n";
+    os << "  \"arena_reclaim_advises\": " << m.arena_reclaim_advises << ",\n";
+    os << "  \"arena_reclaim_bytes\": " << m.arena_reclaim_bytes << ",\n";
+    os << "  \"arena_reclaim_live_bytes\": " << m.arena_reclaim_live_bytes << ",\n";
+    os << "  \"arena_reuse_advises\": " << m.arena_reuse_advises << ",\n";
+    os << "  \"arena_reuse_bytes\": " << m.arena_reuse_bytes << ",\n";
     os << "  \"elapsed_s\": " << r.elapsed_s << ",\n";
     os << "  \"tok_s_replay\": " << tok_s << ",\n";
     os << "  \"nocache\": " << (opt.nocache ? "true" : "false") << "\n";
@@ -341,6 +357,10 @@ int main(int argc, char **argv) {
 
         moevm::Runtime runtime(runtime_opt);
         ReplayMetrics replay_metrics = run_replay(opt, runtime);
+        if (opt.trim_gib_after_replay >= 0.0) {
+            const uint64_t target = static_cast<uint64_t>(opt.trim_gib_after_replay * 1024.0 * 1024.0 * 1024.0);
+            replay_metrics.trim_evictions_after_replay = runtime.trim_to_bytes(target);
+        }
         moevm::RuntimeMetrics runtime_metrics = runtime.metrics();
         std::string json = to_json(opt, replay_metrics, runtime_metrics);
         if (!opt.out_path.empty()) {
@@ -351,6 +371,10 @@ int main(int argc, char **argv) {
             out << json;
         }
         std::cout << json;
+        std::cout.flush();
+        if (opt.hold_seconds_after_replay > 0.0) {
+            std::this_thread::sleep_for(std::chrono::duration<double>(opt.hold_seconds_after_replay));
+        }
         return 0;
     } catch (const std::exception &e) {
         std::cerr << "error: " << e.what() << "\n";

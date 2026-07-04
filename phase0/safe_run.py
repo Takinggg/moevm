@@ -9,8 +9,10 @@ and preserve compact logs for post-mortem analysis.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -28,15 +30,23 @@ METAL_OOM_PATTERNS = [
     "Compute error",
 ]
 
-MODEL_IO_PATTERNS = [
+MODEL_IO_SCRIPTS = {
     "gguf_inspect.py",
     "sidecar_plan.py",
     "sidecar_index.py",
     "sidecar_component_index.py",
     "sidecar_pack.py",
+}
+
+MODEL_IO_EXECUTABLES = {
     "llama-moe-trace",
     "llama-bench",
-]
+    "pager_replay",
+    "runtime_replay",
+    "runtime_smoke",
+}
+
+MODEL_IO_LOCK = Path("/tmp/moevm_model_io.lock")
 
 
 def run_text(cmd: list[str], timeout: float = 5.0) -> str:
@@ -116,6 +126,33 @@ def docker_vm_running() -> bool:
     return False
 
 
+def command_tokens(command: str | list[str]) -> list[str]:
+    if isinstance(command, list):
+        return command
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def command_is_model_io(command: str | list[str], *, include_shell: bool = True) -> bool:
+    tokens = command_tokens(command)
+    if not tokens:
+        return False
+    exe = Path(tokens[0]).name
+    if exe in MODEL_IO_EXECUTABLES or exe in MODEL_IO_SCRIPTS:
+        return True
+    if exe.startswith("python"):
+        return any(Path(token).name in MODEL_IO_SCRIPTS for token in tokens[1:])
+    if include_shell and exe in {"sh", "bash", "zsh"}:
+        return any(
+            Path(token).name in MODEL_IO_EXECUTABLES or Path(token).name in MODEL_IO_SCRIPTS
+            for token in tokens[1:]
+            if not token.endswith(".cpp")
+        )
+    return False
+
+
 def active_model_io_jobs() -> list[str]:
     self_pid = os.getpid()
     self_pgid = os.getpgrp()
@@ -133,9 +170,28 @@ def active_model_io_jobs() -> list[str]:
         command = parts[2]
         if pid == self_pid or pgid == self_pgid:
             continue
-        if any(pattern in command for pattern in MODEL_IO_PATTERNS):
+        if command_is_model_io(command, include_shell=False):
             jobs.append(f"{pid}: {command[:180]}")
     return jobs
+
+
+def acquire_model_io_lock(cmd: list[str]) -> tuple[int | None, str | None]:
+    if not command_is_model_io(cmd):
+        return None, None
+    fd = os.open(MODEL_IO_LOCK, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        try:
+            existing = os.read(fd, 4096).decode("utf-8", errors="replace").strip()
+        except OSError:
+            existing = ""
+        os.close(fd)
+        detail = f": {existing}" if existing else ""
+        return None, f"another safe_run model I/O job holds {MODEL_IO_LOCK}{detail}"
+    os.ftruncate(fd, 0)
+    os.write(fd, f"pid={os.getpid()} cmd={' '.join(cmd[:12])}\n".encode("utf-8", errors="replace"))
+    return fd, None
 
 
 def command_has_flag(argv: list[str], names: Iterable[str]) -> bool:
@@ -159,6 +215,82 @@ def flag_int(argv: list[str], names: Iterable[str]) -> int | None:
                 except ValueError:
                     return None
     return None
+
+
+def flag_float(argv: list[str], names: Iterable[str]) -> float | None:
+    names = set(names)
+    for i, arg in enumerate(argv):
+        if arg in names and i + 1 < len(argv):
+            try:
+                return float(argv[i + 1])
+            except ValueError:
+                return None
+        for name in names:
+            prefix = f"{name}="
+            if arg.startswith(prefix):
+                try:
+                    return float(arg[len(prefix) :])
+                except ValueError:
+                    return None
+    return None
+
+
+def flag_str(argv: list[str], names: Iterable[str]) -> str | None:
+    names = set(names)
+    for i, arg in enumerate(argv):
+        if arg in names and i + 1 < len(argv):
+            return argv[i + 1]
+        for name in names:
+            prefix = f"{name}="
+            if arg.startswith(prefix):
+                return arg[len(prefix) :]
+    return None
+
+
+def validate_gptoss_metal_gate(
+    cmd: list[str],
+    flash_on: bool,
+    max_predict: int,
+    max_arena_gib: float,
+    require_pressure_trim_over_gib: float | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    n_predict = flag_int(cmd, ["-n", "--predict", "--n-predict"])
+    arena_gib = flag_float(cmd, ["--moevm-arena-gib"])
+    graph_mode = flag_str(cmd, ["--moevm-graph-mode"])
+    pool_capacity = flag_int(cmd, ["--moevm-pool-capacity"])
+    override = flag_str(cmd, ["-ot", "--override-tensor"]) or ""
+    uses_moevm = any(arg == "--moevm-sidecar" or arg.startswith("--moevm-sidecar=") for arg in cmd)
+
+    if flash_on:
+        errors.append("gpt-oss Metal smoke requires FlashAttention off")
+    if n_predict is None or n_predict < 0 or n_predict > max_predict:
+        errors.append(f"gpt-oss Metal gate requires -n/--predict between 0 and {max_predict}")
+    if uses_moevm:
+        if arena_gib is None or arena_gib <= 0 or arena_gib > max_arena_gib:
+            errors.append(f"gpt-oss Metal MoEVM gate requires --moevm-arena-gib <= {max_arena_gib:g}")
+        if (
+            arena_gib is not None
+            and require_pressure_trim_over_gib is not None
+            and arena_gib > require_pressure_trim_over_gib
+            and not command_has_flag(cmd, ["--moevm-pressure-trim"])
+        ):
+            errors.append(
+                "gpt-oss Metal scale gate requires --moevm-pressure-trim when --moevm-arena-gib exceeds "
+                f"{require_pressure_trim_over_gib:g}"
+            )
+        if graph_mode != "pool":
+            errors.append("gpt-oss Metal MoEVM gate requires --moevm-graph-mode pool")
+        if pool_capacity is not None and pool_capacity > 16:
+            errors.append("gpt-oss Metal MoEVM gate requires --moevm-pool-capacity <= 16 when set")
+    else:
+        if "exps.weight=CPU" not in override:
+            errors.append("gpt-oss Metal baseline gate requires expert weight CPU override")
+        if not command_has_flag(cmd, ["--op-offload", "--no-op-offload"]):
+            errors.append("gpt-oss Metal baseline gate requires explicit --op-offload or --no-op-offload")
+        if not command_has_flag(cmd, ["--no-repack", "-nr"]):
+            errors.append("gpt-oss Metal baseline gate requires --no-repack")
+    return errors
 
 
 def preflight(args: argparse.Namespace, cmd: list[str]) -> list[str]:
@@ -189,7 +321,14 @@ def preflight(args: argparse.Namespace, cmd: list[str]) -> list[str]:
     )
 
     if model_is_gptoss_120b and uses_metal_layers and not args.allow_known_unsafe:
-        errors.append("blocked known-unsafe shape: gpt-oss-120b with Metal GPU layers")
+        if args.allow_gptoss_metal_scale_gate:
+            errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 128, 24, 16))
+        elif args.allow_gptoss_metal_parity_gate:
+            errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 128, 16))
+        elif args.allow_gptoss_metal_smoke:
+            errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 8, 16))
+        else:
+            errors.append("blocked known-unsafe shape: gpt-oss-120b with Metal GPU layers")
 
     if model_is_gptoss_120b and flash_on and not args.allow_known_unsafe:
         errors.append("blocked known-unsafe shape: gpt-oss-120b with flash attention on Metal")
@@ -238,6 +377,9 @@ def main() -> int:
     parser.add_argument("--allow-docker", action="store_true")
     parser.add_argument("--allow-concurrent-model-io", action="store_true")
     parser.add_argument("--allow-known-unsafe", action="store_true")
+    parser.add_argument("--allow-gptoss-metal-smoke", action="store_true")
+    parser.add_argument("--allow-gptoss-metal-parity-gate", action="store_true")
+    parser.add_argument("--allow-gptoss-metal-scale-gate", action="store_true")
     parser.add_argument("cmd", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -252,6 +394,13 @@ def main() -> int:
         for err in errors:
             print(f"safe-run preflight blocked: {err}", file=sys.stderr)
         return 2
+
+    model_io_lock_fd: int | None = None
+    if not args.allow_concurrent_model_io:
+        model_io_lock_fd, lock_error = acquire_model_io_lock(cmd)
+        if lock_error:
+            print(f"safe-run preflight blocked: {lock_error}", file=sys.stderr)
+            return 2
 
     args.log.parent.mkdir(parents=True, exist_ok=True)
     if args.summary:

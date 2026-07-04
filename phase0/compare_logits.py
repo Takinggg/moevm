@@ -51,17 +51,17 @@ def argmax(values: array) -> tuple[int, float]:
     return best_i, float(best_v)
 
 
-def compare(base_path: Path, cand_path: Path) -> dict:
+def compare(base_path: Path, cand_path: Path, max_rows: int | None = None) -> dict:
     with base_path.open("rb") as fb, cand_path.open("rb") as fc:
         hb = read_header(fb)
         hc = read_header(fc)
         if hb["n_vocab"] != hc["n_vocab"]:
             raise ValueError(f"n_vocab mismatch: {hb['n_vocab']} != {hc['n_vocab']}")
-        if hb["rows"] != hc["rows"]:
+        if max_rows is None and hb["rows"] != hc["rows"]:
             raise ValueError(f"row mismatch: {hb['rows']} != {hc['rows']}")
 
         n_vocab = hb["n_vocab"]
-        rows = hb["rows"]
+        rows = hb["rows"] if max_rows is None else min(max_rows, hb["rows"], hc["rows"])
         total = rows * n_vocab
         sum_abs = 0.0
         sum_sq = 0.0
@@ -135,10 +135,14 @@ def main() -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("candidate", type=Path)
     parser.add_argument("--json", type=Path, help="write comparison summary as JSON")
+    parser.add_argument("--rows", type=int, help="compare only the first N rows")
     parser.add_argument("--max-abs-threshold", type=float, help="exit nonzero if max_abs exceeds this threshold")
     args = parser.parse_args()
 
-    summary = compare(args.baseline, args.candidate)
+    if args.rows is not None and args.rows <= 0:
+        parser.error("--rows must be positive")
+
+    summary = compare(args.baseline, args.candidate, args.rows)
     text = json.dumps(summary, indent=2)
     if args.json:
         args.json.write_text(text + "\n")

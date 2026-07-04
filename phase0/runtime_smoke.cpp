@@ -248,7 +248,12 @@ int main(int argc, char **argv) {
             << "  \"hits\": " << m.hits << ",\n"
             << "  \"misses\": " << m.misses << ",\n"
             << "  \"evictions\": " << m.evictions << ",\n"
-            << "  \"arena_high_water_bytes\": " << m.arena_high_water_bytes << "\n"
+            << "  \"arena_high_water_bytes\": " << m.arena_high_water_bytes << ",\n"
+            << "  \"arena_reclaim_advises\": " << m.arena_reclaim_advises << ",\n"
+            << "  \"arena_reclaim_bytes\": " << m.arena_reclaim_bytes << ",\n"
+            << "  \"arena_reclaim_live_bytes\": " << m.arena_reclaim_live_bytes << ",\n"
+            << "  \"arena_reuse_advises\": " << m.arena_reuse_advises << ",\n"
+            << "  \"arena_reuse_bytes\": " << m.arena_reuse_bytes << "\n"
             << "}\n";
         return 0;
     } catch (const std::exception &e) {

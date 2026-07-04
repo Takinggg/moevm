@@ -79,6 +79,15 @@ uint64_t align_up(uint64_t value, uint64_t align) {
     return ((value + align - 1) / align) * align;
 }
 
+uint64_t align_down(uint64_t value, uint64_t align) {
+    return (value / align) * align;
+}
+
+uint64_t host_page_size() {
+    const long value = ::sysconf(_SC_PAGESIZE);
+    return value > 0 ? static_cast<uint64_t>(value) : 16 * 1024;
+}
+
 int open_readonly(const std::string &path, bool nocache) {
     int fd = ::open(path.c_str(), O_RDONLY);
     if (fd < 0) {
@@ -469,6 +478,22 @@ class Runtime::Impl {
         return it != states_.end() && it->second.status == Status::Resident;
     }
 
+    uint64_t trim_to_bytes(uint64_t target_used_bytes) {
+        if (options_.direct_mmap) {
+            return 0;
+        }
+        std::lock_guard<std::mutex> lock(mu_);
+        check_error_locked();
+        uint64_t evicted = 0;
+        while (arena_used_bytes_ > target_used_bytes && !lru_.empty()) {
+            if (!evict_one_locked()) {
+                break;
+            }
+            ++evicted;
+        }
+        return evicted;
+    }
+
     RuntimeMetrics metrics() const {
         std::lock_guard<std::mutex> lock(mu_);
         RuntimeMetrics out = metrics_;
@@ -482,6 +507,7 @@ class Runtime::Impl {
         out.arena_resident_records = lru_.size();
         out.arena_free_spans = free_spans_.size();
         out.arena_largest_free_span_bytes = largest_free_span_locked();
+        out.arena_reclaim_live_bytes = arena_reclaim_live_bytes_;
         return out;
     }
 
@@ -675,12 +701,14 @@ class Runtime::Impl {
             }
             arena_used_bytes_ += arena_bytes;
             arena_high_water_bytes_ = std::max(arena_high_water_bytes_, arena_used_bytes_);
+            advise_reuse_locked(slot.offset, arena_bytes);
             return true;
         }
         return false;
     }
 
     void release_slot_locked(uint64_t offset, uint64_t bytes) {
+        advise_reclaim_locked(offset, bytes);
         Span span{offset, bytes};
         auto it = std::lower_bound(free_spans_.begin(), free_spans_.end(), span, [](const Span &a, const Span &b) {
             return a.offset < b.offset;
@@ -689,23 +717,116 @@ class Runtime::Impl {
         merge_free_spans_locked();
     }
 
+    void advise_reclaim_locked(uint64_t offset, uint64_t bytes) {
+#if defined(MADV_FREE_REUSABLE) || defined(MADV_FREE)
+        if (arena_.empty() || bytes == 0) {
+            return;
+        }
+        const uint64_t page = host_page_size();
+        const uintptr_t base = reinterpret_cast<uintptr_t>(arena_.data());
+        const uint64_t begin = align_up(static_cast<uint64_t>(base) + offset, page);
+        const uint64_t end = align_down(static_cast<uint64_t>(base) + offset + bytes, page);
+        if (end <= begin) {
+            return;
+        }
+        const size_t len = static_cast<size_t>(end - begin);
+        const int advice =
+#if defined(__APPLE__) && defined(MADV_FREE_REUSABLE)
+            MADV_FREE_REUSABLE;
+#else
+            MADV_FREE;
+#endif
+        if (::madvise(reinterpret_cast<void *>(static_cast<uintptr_t>(begin)), len, advice) == 0) {
+            ++metrics_.arena_reclaim_advises;
+            metrics_.arena_reclaim_bytes += len;
+            add_reusable_span_locked(begin - base, len);
+        }
+#else
+        (void) offset;
+        (void) bytes;
+#endif
+    }
+
+    void advise_reuse_locked(uint64_t offset, uint64_t bytes) {
+        if (arena_.empty() || bytes == 0 || reusable_spans_.empty()) {
+            return;
+        }
+        const uint64_t end = offset + bytes;
+        std::vector<Span> retained;
+        retained.reserve(reusable_spans_.size() + 1);
+
+        for (const Span &span : reusable_spans_) {
+            const uint64_t span_end = span.offset + span.bytes;
+            if (span_end <= offset || span.offset >= end) {
+                retained.push_back(span);
+                continue;
+            }
+
+            const uint64_t reuse_begin = std::max(span.offset, offset);
+            const uint64_t reuse_end = std::min(span_end, end);
+            const uint64_t reuse_bytes = reuse_end - reuse_begin;
+#if defined(__APPLE__) && defined(MADV_FREE_REUSE)
+            if (reuse_bytes > 0) {
+                (void) ::madvise(arena_.data() + reuse_begin, static_cast<size_t>(reuse_bytes), MADV_FREE_REUSE);
+                ++metrics_.arena_reuse_advises;
+                metrics_.arena_reuse_bytes += reuse_bytes;
+            }
+#endif
+            if (arena_reclaim_live_bytes_ >= reuse_bytes) {
+                arena_reclaim_live_bytes_ -= reuse_bytes;
+            } else {
+                arena_reclaim_live_bytes_ = 0;
+            }
+
+            if (span.offset < reuse_begin) {
+                retained.push_back({span.offset, reuse_begin - span.offset});
+            }
+            if (reuse_end < span_end) {
+                retained.push_back({reuse_end, span_end - reuse_end});
+            }
+        }
+        reusable_spans_ = std::move(retained);
+        merge_reusable_spans_locked();
+    }
+
+    void add_reusable_span_locked(uint64_t offset, uint64_t bytes) {
+        if (bytes == 0) {
+            return;
+        }
+        Span span{offset, bytes};
+        auto it = std::lower_bound(reusable_spans_.begin(), reusable_spans_.end(), span, [](const Span &a, const Span &b) {
+            return a.offset < b.offset;
+        });
+        reusable_spans_.insert(it, span);
+        arena_reclaim_live_bytes_ += bytes;
+        merge_reusable_spans_locked();
+    }
+
+    void merge_reusable_spans_locked() {
+        merge_spans(reusable_spans_);
+    }
+
     void merge_free_spans_locked() {
-        if (free_spans_.empty()) {
+        merge_spans(free_spans_);
+    }
+
+    static void merge_spans(std::vector<Span> &spans) {
+        if (spans.empty()) {
             return;
         }
         std::vector<Span> merged;
-        merged.reserve(free_spans_.size());
-        merged.push_back(free_spans_[0]);
-        for (size_t i = 1; i < free_spans_.size(); ++i) {
+        merged.reserve(spans.size());
+        merged.push_back(spans[0]);
+        for (size_t i = 1; i < spans.size(); ++i) {
             Span &last = merged.back();
-            const Span &cur = free_spans_[i];
+            const Span &cur = spans[i];
             if (last.offset + last.bytes == cur.offset) {
                 last.bytes += cur.bytes;
             } else {
                 merged.push_back(cur);
             }
         }
-        free_spans_ = std::move(merged);
+        spans = std::move(merged);
     }
 
     bool evict_one_locked() {
@@ -871,8 +992,10 @@ class Runtime::Impl {
     uint64_t generation_ = 0;
 
     std::vector<Span> free_spans_;
+    std::vector<Span> reusable_spans_;
     uint64_t arena_used_bytes_ = 0;
     uint64_t arena_high_water_bytes_ = 0;
+    uint64_t arena_reclaim_live_bytes_ = 0;
     std::list<uint32_t> lru_;
     std::unordered_map<uint32_t, State> states_;
     RuntimeMetrics metrics_;
@@ -937,6 +1060,10 @@ ComponentView Runtime::component_view(const RecordView &record, ExpertComponent 
 
 bool Runtime::contains(uint32_t layer, uint32_t expert) const {
     return impl_->contains(layer, expert);
+}
+
+uint64_t Runtime::trim_to_bytes(uint64_t target_used_bytes) {
+    return impl_->trim_to_bytes(target_used_bytes);
 }
 
 RuntimeMetrics Runtime::metrics() const {

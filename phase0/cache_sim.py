@@ -196,6 +196,78 @@ def token_in_stats_window(token: int, token_min: int | None, token_max: int | No
     return True
 
 
+def flatten_accesses(records: list[Record]) -> list[tuple[int, int, Key]]:
+    return list(iter_keys(records))
+
+
+def simulate_belady(
+    records: list[Record],
+    capacity: int,
+    stats_token_min: int | None = None,
+    stats_token_max: int | None = None,
+) -> dict:
+    accesses = flatten_accesses(records)
+    positions: dict[Key, deque[int]] = defaultdict(deque)
+    for pos, (_, _, key) in enumerate(accesses):
+        positions[key].append(pos)
+
+    cache: set[Key] = set()
+    next_use: dict[Key, float] = {}
+    hits = misses = 0
+    layer_hits: dict[int, int] = defaultdict(int)
+    layer_total: dict[int, int] = defaultdict(int)
+    inf = float("inf")
+
+    for pos, (token, layer, key) in enumerate(accesses):
+        queue = positions[key]
+        if queue and queue[0] == pos:
+            queue.popleft()
+        key_next = float(queue[0]) if queue else inf
+
+        hit = key in cache
+        if hit:
+            next_use[key] = key_next
+        else:
+            if len(cache) >= capacity and cache:
+                victim = max(cache, key=lambda k: next_use.get(k, inf))
+                cache.remove(victim)
+                next_use.pop(victim, None)
+            cache.add(key)
+            next_use[key] = key_next
+
+        if not token_in_stats_window(token, stats_token_min, stats_token_max):
+            continue
+        if hit:
+            hits += 1
+            layer_hits[layer] += 1
+        else:
+            misses += 1
+        layer_total[layer] += 1
+
+    total = hits + misses
+    worst_layers = sorted(
+        (
+            {
+                "layer": layer,
+                "hit_rate": layer_hits[layer] / count if count else 0.0,
+                "accesses": count,
+            }
+            for layer, count in layer_total.items()
+        ),
+        key=lambda x: x["hit_rate"],
+    )[:8]
+    return {
+        "policy": "belady",
+        "capacity_entries": capacity,
+        "stats_token_min": stats_token_min,
+        "stats_token_max": stats_token_max,
+        "hits": hits,
+        "misses": misses,
+        "hit_rate": hits / total if total else 0.0,
+        "worst_layers": worst_layers,
+    }
+
+
 def simulate(
     records: list[Record],
     policy_name: str,
@@ -203,6 +275,8 @@ def simulate(
     stats_token_min: int | None = None,
     stats_token_max: int | None = None,
 ) -> dict:
+    if policy_name == "belady":
+        return simulate_belady(records, capacity, stats_token_min, stats_token_max)
     if policy_name == "lru":
         policy: Policy = LRU(capacity)
     elif policy_name == "2q":

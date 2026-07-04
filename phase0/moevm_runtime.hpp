@@ -66,6 +66,11 @@ struct RuntimeMetrics {
     uint64_t arena_resident_records = 0;
     uint64_t arena_free_spans = 0;
     uint64_t arena_largest_free_span_bytes = 0;
+    uint64_t arena_reclaim_advises = 0;
+    uint64_t arena_reclaim_bytes = 0;
+    uint64_t arena_reclaim_live_bytes = 0;
+    uint64_t arena_reuse_advises = 0;
+    uint64_t arena_reuse_bytes = 0;
     uint64_t delay_injections = 0;
     uint64_t delay_us = 0;
 };
@@ -89,6 +94,7 @@ class Runtime {
     void release_record(const RecordView &record);
     ComponentView component_view(const RecordView &record, ExpertComponent component) const;
     bool contains(uint32_t layer, uint32_t expert) const;
+    uint64_t trim_to_bytes(uint64_t target_used_bytes);
 
     RuntimeMetrics metrics() const;
 

@@ -70,6 +70,10 @@ What it does:
 - Refuses to start when another model I/O job is already active, unless `--allow-concurrent-model-io` is passed for tiny controlled tests.
 - Requires `sidecar_pack.py` to use `--nocache`, so packed-sidecar creation does not intentionally fill the unified-memory file cache.
 - Refuses known-dangerous `gpt-oss-120b` + Metal command shapes unless `--allow-known-unsafe` is passed.
+- Allows bounded gpt-oss Metal only through narrow explicit gates:
+  - `--allow-gptoss-metal-smoke`: `-n <= 8`, MoEVM arena <= 16GiB.
+  - `--allow-gptoss-metal-parity-gate`: `-n <= 128`, MoEVM arena <= 16GiB.
+  - `--allow-gptoss-metal-scale-gate`: `-n <= 128`, MoEVM arena <= 24GiB, and `--moevm-pressure-trim` is required above 16GiB.
 - Kills the whole process group on low free memory, high wired memory, excessive RSS, excessive swapout delta, timeout, oversized logs, or Metal OOM log patterns.
 - Writes a compact summary with the stop reason and log tail.
 
@@ -1251,7 +1255,78 @@ C++ runtime replay with real arena and candidate prefetch:
 - 32GiB, top4: demand reads 0, read 39.35GiB, evictions 598, arena high-water 31.99GiB, 31.65 replay tok/s on this run. More RAM reduced reads but hurt wall-time, likely due memory pressure / lower read throughput.
 - 28GiB, top10: demand reads 728, read 108.01GiB, evictions 6,500, 24.45 replay tok/s.
 
-Best current point:
+Cold-replay caveat:
+
+- `sudo purge` was not available non-interactively, so no true cold page-cache replay was produced.
+- A best-effort eviction read before replay still produced 46.22 replay tok/s while reading 44.54GiB. Treat that as warm/cache-contaminated evidence, not a publishable cold SSD number.
+- Public claims should use demand-read behavior and cache locality. Replay tok/s is currently internal warm-runtime evidence.
+
+Long gpt-oss traces:
+
+- `cache_sim.py` supports `belady` as an offline-optimal upper bound.
+- Three CPU-only coding traces at 512 generated tokens were collected: Python backend, TypeScript type utility, and Rust tokenizer.
+- CPU-only decode stayed at 13.77-14.36 tok/s.
+- 28GiB LRU decode-only hit rate was 95.10-95.75%; Belady at 28GiB was 97.15-97.49%.
+- 24GiB LRU already gives 93.26-93.63% hit rate with 25.95-26.88 sync tok/s estimate.
+- Runtime replay at 28GiB/candidate top4 on the three long traces had demand reads 1, 0, and 0 across about 241k expert accesses. Warm replay tok/s was 88.12-94.82 and is not a cold-public number.
+- Research conclusion: LRU is quasi-optimal here. The 28GiB gap to offline-optimal Belady is only about 1.7-2.1 hit-rate points, so policy swaps like S3-FIFO/LFU are deprioritized.
+
+Host-arena reclaim/trim guard:
+
+- On macOS, evicted full pages use `MADV_FREE_REUSABLE`; pages get `MADV_FREE_REUSE` before being written again.
+- `Runtime::trim_to_bytes(target_used_bytes)` evicts LRU records without replacing them, which is the path that creates real pressure relief.
+- New runtime metrics: `arena_reclaim_advises`, `arena_reclaim_bytes`, `arena_reclaim_live_bytes`, `arena_reuse_advises`, and `arena_reuse_bytes`.
+- Sequential smoke paliers on the Python long trace, 160 tokens:
+  - 16GiB: 4 demand reads, 3,800 evictions, 46.79GiB cumulative reclaim, 0.00GiB live reclaim, 22.81 replay tok/s, safe-run end wired 2.79GiB.
+  - 20GiB: 2 demand reads, 2,440 evictions, 30.05GiB cumulative reclaim, 0.00GiB live reclaim, 29.46 replay tok/s, safe-run end wired 2.79GiB.
+  - 24GiB: 0 demand reads, 1,125 evictions, 13.85GiB cumulative reclaim, 0.00GiB live reclaim, 40.90 replay tok/s, safe-run end wired 2.80GiB.
+- Footprint validation: no-trim 16GiB replay had `phys_footprint=17.19GB` and 0 reclaimable; trim-to-8GiB had `phys_footprint=8.60GB`, `footprint` reclaimable 8.59GB, and `arena_reclaim_live_bytes=8.59GB`.
+- Conclusion: eviction-only advice is not a safety mechanism because pages are immediately reused. A pressure-triggered trim/shrink path is the safety mechanism.
+- Do not run these paliers in parallel: a parallel 20GiB+24GiB attempt was correctly killed by `safe_run.py` on swapout delta.
+- `safe_run.py` now includes `runtime_replay`, `runtime_smoke`, and `pager_replay` in model-I/O detection, and holds a nonblocking `/tmp/moevm_model_io.lock` flock for model-I/O commands. This closes the startup race where two safe_run processes could pass process-list preflight at the same time.
+- gpt-oss Metal remains blocked by default. Explicit gates:
+  - `--allow-gptoss-metal-smoke`: `-n <= 8`, MoEVM arena <= 16GiB.
+  - `--allow-gptoss-metal-parity-gate`: `-n <= 128`, MoEVM arena <= 16GiB.
+  - `--allow-gptoss-metal-scale-gate`: `-n <= 128`, MoEVM arena <= 24GiB, and `--moevm-pressure-trim` required above 16GiB.
+  - For comparable Metal baselines without MoEVM: FlashAttention off, expert weight CPU override, explicit `--op-offload` or `--no-op-offload`, and `--no-repack`.
+
+Metal smoke:
+
+- `llama-moe-trace` has `--moevm-load-only` for true load-only checks that initialize model/context/runtime/graph hook and skip prompt prefill/decode.
+- `llama-moe-trace` has `--moevm-pressure-trim`, backed by Darwin memory-pressure dispatch events. WARN trims by one configured step, CRITICAL by two, bounded by `--moevm-pressure-trim-min-gib`.
+- Sparse-mmap loader content is present in the current branch (`llama_buf_map_find` plus post-load `unmap_fragment` of unused mmap ranges). The exact sparse-mmap commit is patch-equivalent but not an ancestor of this branch.
+- Load-only: `gpt_oss_120b_q4_metal_loadonly_pool16.log`, `-ngl 99`, expert weights CPU, graph pool, arena 16GiB, pool cap16, FA off. Passed; graph-mode installed on `MTL0`; safe-run end wired 3.49GiB.
+- Load-only with pressure trim armed: `gpt_oss_120b_q4_metal_moevm_pool16_load_only_pressure_trim.log`, passed; pressure listener armed; no pressure events.
+- CPU baseline n8: `gpt_oss_120b_q4_cpu_baseline_n8_v2.log`, 5.74 tok/s, IDs `[279,1314,57388,6271,11,287,3127,622]`.
+- Metal baseline n8, expert weights CPU: `gpt_oss_120b_q4_metal_baseline_cpu_experts_n8.log`, 4.65 tok/s, IDs `[279,1314,71973,6271,11,287,3127,622]`.
+- MoEVM graph pool n8: `gpt_oss_120b_q4_metal_moevm_pool16_n8.log`, 8.71 tok/s, IDs `[279,1314,71973,6271,11,287,3127,622]`, demand reads 0, runtime high-water 12.63GiB, graph patch applied 540, runtime errors 0.
+- CPU baseline vs MoEVM logits: 1 token/argmax mismatch, `max_abs=5.33`. The same mismatch exists CPU baseline vs Metal baseline, so this is CPU-vs-Metal numeric drift, not isolated MoEVM failure.
+- Metal baseline vs MoEVM logits: 0 token mismatches, 0 argmax mismatches, `max_abs=1.36`, `mean_abs=0.0705`. This is not bit-exact because the baseline uses CPU expert matmuls while MoEVM uses Metal pool matmuls for selected experts.
+- Same-backend parity gate: `gpt_oss_120b_q4_metal_opoffload_baseline_n64.log` vs `gpt_oss_120b_q4_metal_moevm_pool16_n64.log` gives 64 rows, 0 token mismatches, 0 argmax mismatches, `max_abs=0.0`. This rules out the suspected gpt-oss `ADD_ID` bias corruption on the graph-pool path.
+- Pressure-trim regression gate: `gpt_oss_120b_q4_metal_moevm_pool16_n64_pressure_trim.log` remains bit-exact vs op-offload (`max_abs=0.0`), 11.44 tok/s, demand reads 0, no pressure events.
+
+Metal scale:
+
+- Short prompt, `c=128`, `n=64`, same op-offload baseline:
+  - 16GiB: 11.44 tok/s, demand reads 0, runtime evictions 511, `max_abs=0.0`.
+  - 20GiB: 13.34 tok/s, demand reads 0, runtime evictions 35, `max_abs=0.0`.
+  - 24GiB: 13.24 tok/s, demand reads 0, runtime evictions 0, arena used only 20.38GiB, `max_abs=0.0`.
+- Real-context prompt: `prompt_observability_512plus.txt`, 990 prompt tokens, `c=4096`, `n=128`.
+  - 16GiB, `b=1 ub=1`: wall 86.99s, decode 9.37 tok/s, demand reads 11, prefetch reads 18,764, wait 19.42s, evictions 17,476.
+  - 24GiB, `b=1 ub=1`: wall 76.42s, decode 9.94 tok/s, demand reads 0, prefetch reads 5,279, wait 6.80s, evictions 3,330, bit-exact vs 16GiB (`max_abs=0.0` over 128 rows).
+  - 24GiB, `b=4 ub=4`: wall 64.05s, decode 10.19 tok/s, demand reads 360, prefetch reads 5,070, wait 5.49s, evictions 3,481.
+- Timestamp diagnostic, real-context 24GiB `b=1 ub=1`, `n=64`: wall 71.88s, `metal_gpu_busy_us=20,067,878`, `ids_readback_us=25,785,434`, `callback_us=29,181,138`, `backend_sync_us=26,733,346`. The next bottleneck is rendez-vous/ids readback, not arena capacity.
+- `b=4 ub=4` is same-backend correct: op-offload `ub=4` vs MoEVM `ub=4`, 16 rows, `max_abs=0.0`. It does not reproduce the `b=1 ub=1` token stream, so treat it as a validated batch mode, not a bit-identical replacement.
+- `b=8 ub=8` with cap16 fails safely with `fallback_k_overflow=1` because the top-k union exceeds pool capacity. Do not increase pool cap above 16 without a separate narrower memory gate.
+
+gpt-oss `ADD_ID` invariant:
+
+- gpt-oss has per-expert bias tensors using `GGML_OP_ADD_ID`.
+- Graph-pool build and scheduler paths currently patch only `GGML_OP_MUL_MAT_ID` nodes.
+- Legacy sparse-copy also rejects non-`MUL_MAT_ID` first nodes.
+- Keep `ADD_ID` bias ids untouched when moving toward Metal smoke tests.
+
+Best current paging point:
 
 - 28GiB arena.
 - `candidate_topk=4`.
@@ -1261,6 +1336,7 @@ Best current point:
 
 Interpretation:
 
-- This is the first gpt-oss proof that MoEVM can serve a routed expert pool larger than the Mac's practical resident budget: 56.88GiB of routed experts with a 28GiB arena and no demand misses on this trace.
-- It is not yet full gpt-oss inference with Metal. The safe claim is paging/runtime validation, not user-facing gpt-oss tok/s.
-- Next gpt-oss gate is a longer route trace, then runtime replay at 24/28GiB. Full inference needs a safer gpt-oss Metal strategy or a larger unified-memory machine.
+- This is now full bounded gpt-oss Metal/MoEVM inference on this Mac, not just replay: 56.88GiB of routed experts, selected expert paging, same-backend bit-exact gates, no jetsam/watchdog in bounded runs.
+- Current publishable interactive number is conservative: 9.94 tok/s on `c=4096`, 990-token prompt, `n=128`, arena 24GiB, `b=1 ub=1`, same-backend correctness preserved.
+- Current best throughput mode for real context is `b=4 ub=4` at 64.05s wall for prompt+128 decode, but it changes the token stream relative to `b=1`; label it batch mode.
+- Next engineering target is scheduler/readback reduction. Larger arena alone is no longer the main lever.
