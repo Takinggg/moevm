@@ -56,11 +56,14 @@ def build_plan(paths: list[Path], align_bytes: int, include_hash: bool) -> dict[
         raise SystemExit("could not determine expert_count from GGUF metadata")
 
     data_starts: dict[str, int] = {}
+    file_sizes: dict[str, int] = {}
     if "shards" in header:
         for shard in header["shards"]:
             data_starts[shard["path"]] = int(shard["data_start"])
+            file_sizes[shard["path"]] = int(shard["file_bytes_available"])
     else:
         data_starts[header["path"]] = int(header["data_start"])
+        file_sizes[header["path"]] = int(header["file_bytes_available"])
 
     routed: dict[tuple[int, str], TensorInfo] = {}
     for t in tensors:
@@ -94,14 +97,14 @@ def build_plan(paths: list[Path], align_bytes: int, include_hash: bool) -> dict[
                 if tensor.n_bytes % expert_count != 0:
                     raise SystemExit(f"tensor {tensor.name} bytes {tensor.n_bytes} not divisible by experts {expert_count}")
                 slice_bytes = tensor.n_bytes // expert_count
-                source_path = header["paths"][0] if "paths" in header else header["path"]
-                # Multi-shard support: full tensor payloads in GGUF split files
-                # keep their tensor-info entry in the shard that contains them.
-                # TensorInfo currently does not carry path, so for one-file Qwen3
-                # this is exact. For multi-shard sidecars, extend TensorInfo with
-                # source path before using this script to pack bytes.
+                source_path = tensor.source_path
                 source_data_start = data_starts[source_path]
                 source_offset = source_data_start + tensor.offset + expert * slice_bytes
+                if source_offset + slice_bytes > file_sizes[source_path]:
+                    raise SystemExit(
+                        f"slice for {tensor.name} expert {expert} exceeds source file bounds: "
+                        f"{source_path} offset={source_offset} bytes={slice_bytes} size={file_sizes[source_path]}"
+                    )
                 slices.append(
                     {
                         "kind": kind,

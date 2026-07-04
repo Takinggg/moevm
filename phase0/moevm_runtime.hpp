@@ -16,6 +16,7 @@ struct RuntimeOptions {
     uint32_t prefetch_threads = 4;
     bool nocache = true;
     bool direct_mmap = false;
+    bool verify_integrity = true;
     uint32_t inject_delay_max_us = 0;
     uint64_t inject_delay_seed = 0x9e3779b97f4a7c15ull;
 };

@@ -134,6 +134,7 @@ class TensorInfo:
     n_bytes: int | None
     category: str
     layer: int | None
+    source_path: str
 
 
 def read_value(r: Reader, vtype: int) -> Any:
@@ -254,6 +255,7 @@ def parse_gguf(path: Path) -> tuple[dict[str, Any], list[TensorInfo], dict[str, 
                     n_bytes=tensor_nbytes(n_elements, ggml_type),
                     category=categorize(name),
                     layer=layer_from_name(name),
+                    source_path=str(path),
                 )
             )
 

@@ -198,7 +198,11 @@ class Runtime::Impl {
             load_component_index();
         }
         sidecar_fd_ = open_readonly(options_.sidecar_path, options_.nocache);
-        verify_sidecar_integrity();
+        if (options_.verify_integrity) {
+            verify_sidecar_integrity();
+        } else {
+            verify_sidecar_size_only();
+        }
         if (options_.direct_mmap) {
             sidecar_mmap_bytes_ = file_size(sidecar_fd_);
             void * mapped = ::mmap(nullptr, static_cast<size_t>(sidecar_mmap_bytes_), PROT_READ, MAP_PRIVATE, sidecar_fd_, 0);
@@ -615,6 +619,16 @@ class Runtime::Impl {
                     fail("sidecar sha256 prefix does not match component index integrity header");
                 }
             }
+        }
+    }
+
+    void verify_sidecar_size_only() const {
+        const uint64_t actual_size = file_size(sidecar_fd_);
+        if (index_has_integrity_ && actual_size != index_sidecar_size_) {
+            fail("sidecar size does not match index integrity header");
+        }
+        if (component_has_integrity_ && actual_size != component_sidecar_size_) {
+            fail("sidecar size does not match component index integrity header");
         }
     }
 

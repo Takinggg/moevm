@@ -1178,3 +1178,89 @@ Interpretation:
 - It is not yet a 25+ tok/s breakthrough. The current graph scheduler hook is roughly tied with the best warm P0.d/P0.c runs.
 - A.1 says the GPU is not saturated; the practical bottleneck is still scheduler/CPU rendezvous around ids readback and graph-pool callbacks.
 - DFlash is correct and fallback-free on graph-build, and after callback fusion it matches the old audited DFlash headline without the old copy-hook path. Next useful optimization is reducing per-layer ids readback/sync itself or reducing copied expert bytes.
+
+## gpt-oss-120b Q4_K_M Runtime Replay
+
+Safety boundary:
+
+- Full `gpt-oss-120b` Metal inference remains blocked on this Mac. Prior Metal / FlashAttention tuning hit a Metal OOM path and a watchdog panic route.
+- The validated work here is CPU-only route tracing, multi-shard sidecar packing, packed replay, and C++ MoEVM runtime replay with a real RAM arena.
+- Do not run gpt-oss `-ngl` / `-fa` experiments without a new safety plan.
+
+Layout:
+
+- Source: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf`
+- Shards: 2.
+- Routed expert pool: 56.88GiB.
+- Resident non-routed estimate: 1.57GiB.
+- Layers: 36.
+- Experts: 128.
+- Active experts per token: 4.
+- Record size: 12.64MiB per `(layer, expert)`.
+
+Tooling fixes needed for gpt-oss:
+
+- `gguf_inspect.py` now tracks `TensorInfo.source_path`.
+- `sidecar_plan.py` now uses the owning shard for every tensor and validates slice bounds against the source shard size.
+- This matters because layer 28 has 128 mixed records where gate/up live in shard 2 while down still lives in shard 1.
+- `cache_sim.py` now supports `--stats-token-min` / `--stats-token-max`, so prefill-warmed decode can be measured separately from cold prefill.
+- `sidecar_replay.py` skips `{"kind":"candidates"}` trace rows and replays only selected expert rows.
+- `runtime_replay.cpp` and `runtime_smoke.cpp` now release pinned `RecordView`s after use. Without this, the arena cannot evict and gpt-oss replay fails with `arena allocation failed for selected expert`.
+- `sidecar_pack.py` now includes alignment padding in its SHA-256 summary. Existing gpt-oss sidecar hash was recomputed from the actual file.
+- `RuntimeOptions.verify_integrity` defaults to true. `runtime_replay --no-integrity-check`, `runtime_smoke --no-integrity-check`, and `llama-moe-trace --moevm-no-integrity-check` skip the full SHA read while keeping sidecar size checks.
+
+Sidecar:
+
+- Plan: `moevm/runs/gpt_oss_120b_q4_sidecar_plan.json`.
+- Packed sidecar: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm`.
+- Index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx`.
+- Component index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx`.
+- Records: 4,608.
+- Payload: 56.74GiB.
+- Pack time: 55.72s, 1.02GiB/s.
+- Actual file SHA-256: `ac311e633a1b555054f6c687a253cdccf93615f8c1715b88f0f13008109d5f64`.
+
+Trace:
+
+- Trace: `moevm/runs/gpt_oss_120b_q4_cpu_trace_code_n128.jsonl`.
+- Prompt tokens: 67.
+- Generated tokens: 128.
+- Total trace tokens: 195.
+- Topk records: 6,954.
+- Candidate records: 6,954.
+- Expert accesses: 27,816.
+- CPU-only decode: 128 tokens in 11.796s, 10.85 tok/s.
+
+Decode-only cache simulation after prompt token 67:
+
+- 24GiB LRU: hit 0.859, miss 256.8MB/tok, sync estimate 15.30 tok/s.
+- 28GiB LRU: hit 0.924, miss 138.2MB/tok, sync estimate 24.02 tok/s.
+- 32GiB LRU: hit 0.947, miss 95.6MB/tok, sync estimate 30.20 tok/s.
+
+Packed replay over cold prompt+decode:
+
+- 28GiB: hit 0.870, 3,614 reads, 44.49GiB read, 53.29 replay tok/s.
+- 32GiB: hit 0.885, 3,195 reads, 39.33GiB read, 58.00 replay tok/s.
+- At 28GiB, packed sidecar reduces read ops from 10,842 source-slice reads to 3,614 packed record reads.
+
+C++ runtime replay with real arena and candidate prefetch:
+
+- `candidate_topk=4` is the correct gpt-oss setting because active experts/token is 4. `candidate_topk=10` over-prefetches badly.
+- 24GiB, top4: demand reads 0, read 59.87GiB, evictions 2,914, arena high-water 24.00GiB, 37.80 replay tok/s.
+- 28GiB, top4: demand reads 0, read 44.54GiB, evictions 1,345, arena high-water 27.99GiB, 50.89 replay tok/s.
+- 32GiB, top4: demand reads 0, read 39.35GiB, evictions 598, arena high-water 31.99GiB, 31.65 replay tok/s on this run. More RAM reduced reads but hurt wall-time, likely due memory pressure / lower read throughput.
+- 28GiB, top10: demand reads 728, read 108.01GiB, evictions 6,500, 24.45 replay tok/s.
+
+Best current point:
+
+- 28GiB arena.
+- `candidate_topk=4`.
+- 4 prefetch threads.
+- 64MiB max in-flight.
+- `--no-integrity-check` after initial sidecar validation.
+
+Interpretation:
+
+- This is the first gpt-oss proof that MoEVM can serve a routed expert pool larger than the Mac's practical resident budget: 56.88GiB of routed experts with a 28GiB arena and no demand misses on this trace.
+- It is not yet full gpt-oss inference with Metal. The safe claim is paging/runtime validation, not user-facing gpt-oss tok/s.
+- Next gpt-oss gate is a longer route trace, then runtime replay at 24/28GiB. Full inference needs a safer gpt-oss Metal strategy or a larger unified-memory machine.

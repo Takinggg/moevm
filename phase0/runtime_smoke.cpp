@@ -20,6 +20,7 @@ struct Options {
     uint64_t inflight_mib = 16;
     uint32_t threads = 2;
     size_t candidate_topk = 10;
+    bool verify_integrity = true;
 };
 
 [[noreturn]] void fail(const std::string &msg) {
@@ -34,7 +35,8 @@ void usage(const char *argv0) {
         << "  --arena-mib N       default 64\n"
         << "  --inflight-mib N    default 16\n"
         << "  --threads N         default 2\n"
-        << "  --candidate-topk N  default 10\n";
+        << "  --candidate-topk N  default 10\n"
+        << "  --no-integrity-check verify sidecar size only, not SHA prefix\n";
 }
 
 Options parse_args(int argc, char **argv) {
@@ -63,6 +65,8 @@ Options parse_args(int argc, char **argv) {
             opt.threads = static_cast<uint32_t>(std::stoul(need(a)));
         } else if (a == "--candidate-topk") {
             opt.candidate_topk = static_cast<size_t>(std::stoul(need(a)));
+        } else if (a == "--no-integrity-check") {
+            opt.verify_integrity = false;
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
             std::exit(0);
@@ -201,6 +205,7 @@ int main(int argc, char **argv) {
         runtime_opt.max_inflight_bytes = opt.inflight_mib * 1024ull * 1024ull;
         runtime_opt.prefetch_threads = opt.threads;
         runtime_opt.nocache = true;
+        runtime_opt.verify_integrity = opt.verify_integrity;
 
         moevm::Runtime runtime(runtime_opt);
         runtime.start();
@@ -219,6 +224,7 @@ int main(int argc, char **argv) {
             if (view.came_from_prefetch) {
                 ++prefetched_selected;
             }
+            runtime.release_record(view);
         }
         runtime.stop();
 

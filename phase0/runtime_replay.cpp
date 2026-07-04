@@ -27,6 +27,7 @@ struct Options {
     size_t candidate_topk = 10;
     int max_tokens = -1;
     bool nocache = true;
+    bool verify_integrity = true;
 };
 
 struct ReplayMetrics {
@@ -54,6 +55,7 @@ void usage(const char *argv0) {
         << "  --candidate-topk N              default 10\n"
         << "  --max-tokens N                  default all\n"
         << "  --no-nocache                    do not request F_NOCACHE\n"
+        << "  --no-integrity-check            verify sidecar size only, not SHA prefix\n"
         << "  --out PATH                      write JSON summary\n";
 }
 
@@ -87,6 +89,8 @@ Options parse_args(int argc, char **argv) {
             opt.out_path = need(a);
         } else if (a == "--no-nocache") {
             opt.nocache = false;
+        } else if (a == "--no-integrity-check") {
+            opt.verify_integrity = false;
         } else if (a == "-h" || a == "--help") {
             usage(argv[0]);
             std::exit(0);
@@ -311,6 +315,7 @@ ReplayMetrics run_replay(const Options &opt, moevm::Runtime &runtime) {
             moevm::RecordView view = runtime.wait_selected(static_cast<uint32_t>(layer), expert);
             metrics.selected_bytes += view.bytes;
             ++metrics.accesses;
+            runtime.release_record(view);
         }
     }
     runtime.stop();
@@ -332,6 +337,7 @@ int main(int argc, char **argv) {
         runtime_opt.max_inflight_bytes = static_cast<uint64_t>(opt.inflight_mib * 1024.0 * 1024.0);
         runtime_opt.prefetch_threads = opt.threads;
         runtime_opt.nocache = opt.nocache;
+        runtime_opt.verify_integrity = opt.verify_integrity;
 
         moevm::Runtime runtime(runtime_opt);
         ReplayMetrics replay_metrics = run_replay(opt, runtime);

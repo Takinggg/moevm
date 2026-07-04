@@ -188,7 +188,21 @@ def iter_keys(records: Iterable[Record]) -> Iterable[tuple[int, int, Key]]:
             yield token, layer, (layer, expert)
 
 
-def simulate(records: list[Record], policy_name: str, capacity: int) -> dict:
+def token_in_stats_window(token: int, token_min: int | None, token_max: int | None) -> bool:
+    if token_min is not None and token < token_min:
+        return False
+    if token_max is not None and token > token_max:
+        return False
+    return True
+
+
+def simulate(
+    records: list[Record],
+    policy_name: str,
+    capacity: int,
+    stats_token_min: int | None = None,
+    stats_token_max: int | None = None,
+) -> dict:
     if policy_name == "lru":
         policy: Policy = LRU(capacity)
     elif policy_name == "2q":
@@ -203,8 +217,10 @@ def simulate(records: list[Record], policy_name: str, capacity: int) -> dict:
     hits = misses = 0
     layer_hits: dict[int, int] = defaultdict(int)
     layer_total: dict[int, int] = defaultdict(int)
-    for _, layer, key in iter_keys(records):
+    for token, layer, key in iter_keys(records):
         hit = policy.access(key)
+        if not token_in_stats_window(token, stats_token_min, stats_token_max):
+            continue
         if hit:
             hits += 1
             layer_hits[layer] += 1
@@ -226,6 +242,8 @@ def simulate(records: list[Record], policy_name: str, capacity: int) -> dict:
     return {
         "policy": policy_name,
         "capacity_entries": capacity,
+        "stats_token_min": stats_token_min,
+        "stats_token_max": stats_token_max,
         "hits": hits,
         "misses": misses,
         "hit_rate": hits / total if total else 0.0,
@@ -275,20 +293,29 @@ def main() -> int:
     ap.add_argument("--policies", default="lru,2q,s3fifo,lfu-decay")
     ap.add_argument("--bssd-gbps", type=float, default=5.0)
     ap.add_argument("--compute-ms", type=float, default=14.0)
+    ap.add_argument("--stats-token-min", type=int)
+    ap.add_argument("--stats-token-max", type=int)
     ap.add_argument("--json", type=Path)
     args = ap.parse_args()
 
     records = parse_trace(args.trace)
+    stats_records = [
+        record
+        for record in records
+        if token_in_stats_window(record[0], args.stats_token_min, args.stats_token_max)
+    ]
     budgets = [float(x) for x in args.budgets.split(",") if x.strip()]
     policies = [x.strip().lower() for x in args.policies.split(",") if x.strip()]
     total_accesses = sum(len(r[2]) for r in records)
+    stats_accesses = sum(len(r[2]) for r in stats_records)
+    stats_unique_tokens = len(set(r[0] for r in stats_records))
 
     results = []
     for budget in budgets:
         cap = max(1, int((budget * 1024) / args.slice_mb))
         for pol in policies:
-            row = simulate(records, pol, cap)
-            miss_mb_per_token = (row["misses"] * args.slice_mb) / max(1, len(set(r[0] for r in records)))
+            row = simulate(records, pol, cap, args.stats_token_min, args.stats_token_max)
+            miss_mb_per_token = (row["misses"] * args.slice_mb) / max(1, stats_unique_tokens)
             io_s = (miss_mb_per_token / 1000) / args.bssd_gbps
             compute_s = args.compute_ms / 1000
             row.update(
@@ -306,8 +333,13 @@ def main() -> int:
         "records": len(records),
         "unique_tokens": len(set(r[0] for r in records)),
         "total_expert_accesses": total_accesses,
+        "stats_records": len(stats_records),
+        "stats_unique_tokens": stats_unique_tokens,
+        "stats_expert_accesses": stats_accesses,
+        "stats_token_min": args.stats_token_min,
+        "stats_token_max": args.stats_token_max,
         "slice_mb": args.slice_mb,
-        "working_set": working_set(records, [512, 2048, 8192], args.slice_mb),
+        "working_set": working_set(stats_records, [512, 2048, 8192], args.slice_mb),
         "results": results,
     }
     if args.json:
@@ -317,6 +349,11 @@ def main() -> int:
     print(f"records: {out['records']}")
     print(f"unique_tokens: {out['unique_tokens']}")
     print(f"expert_accesses: {out['total_expert_accesses']}")
+    if args.stats_token_min is not None or args.stats_token_max is not None:
+        print(
+            f"stats_window: token_min={args.stats_token_min} token_max={args.stats_token_max} "
+            f"tokens={stats_unique_tokens} expert_accesses={stats_accesses}"
+        )
     print("\nWorking set:")
     for row in out["working_set"]:
         print(
@@ -334,4 +371,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

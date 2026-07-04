@@ -39,6 +39,8 @@ def iter_trace(path: Path, max_tokens: int | None):
             if not line.strip():
                 continue
             row = json.loads(line)
+            if row.get("kind") == "candidates":
+                continue
             token = int(row["token"])
             if max_tokens is not None and token not in seen_tokens and len(seen_tokens) >= max_tokens:
                 break

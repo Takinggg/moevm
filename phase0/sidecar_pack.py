@@ -48,7 +48,9 @@ def main() -> int:
             for idx, record in enumerate(records, start=1):
                 target = int(record["pack_offset"])
                 if written < target:
-                    out.write(b"\0" * (target - written))
+                    padding = b"\0" * (target - written)
+                    out.write(padding)
+                    hasher.update(padding)
                     written = target
                 elif written > target:
                     raise RuntimeError(f"output offset {written} passed record target {target}")
