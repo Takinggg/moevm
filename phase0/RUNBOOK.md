@@ -1302,7 +1302,7 @@ Metal smoke:
 - MoEVM graph pool n8: `gpt_oss_120b_q4_metal_moevm_pool16_n8.log`, 8.71 tok/s, IDs `[279,1314,71973,6271,11,287,3127,622]`, demand reads 0, runtime high-water 12.63GiB, graph patch applied 540, runtime errors 0.
 - CPU baseline vs MoEVM logits: 1 token/argmax mismatch, `max_abs=5.33`. The same mismatch exists CPU baseline vs Metal baseline, so this is CPU-vs-Metal numeric drift, not isolated MoEVM failure.
 - Metal baseline vs MoEVM logits: 0 token mismatches, 0 argmax mismatches, `max_abs=1.36`, `mean_abs=0.0705`. This is not bit-exact because the baseline uses CPU expert matmuls while MoEVM uses Metal pool matmuls for selected experts.
-- Same-backend parity gate: `gpt_oss_120b_q4_metal_opoffload_baseline_n64.log` vs `gpt_oss_120b_q4_metal_moevm_pool16_n64.log` gives 64 rows, 0 token mismatches, 0 argmax mismatches, `max_abs=0.0`. This rules out the suspected gpt-oss `ADD_ID` bias corruption on the graph-pool path.
+- Same-backend Metal-vs-Metal parity gate: `gpt_oss_120b_q4_metal_opoffload_baseline_n64.log` vs `gpt_oss_120b_q4_metal_moevm_pool16_n64.log` gives 64 rows, 0 token mismatches, 0 argmax mismatches, `max_abs=0.0`. This is the discriminating test for the earlier `max_abs=1.36`: old op-offload Metal path vs MoEVM pool, same Metal backend and same MXFP4 dequant path. It rules out the suspected gpt-oss `ADD_ID` bias corruption on this tested graph-pool path.
 - Pressure-trim regression gate: `gpt_oss_120b_q4_metal_moevm_pool16_n64_pressure_trim.log` remains bit-exact vs op-offload (`max_abs=0.0`), 11.44 tok/s, demand reads 0, no pressure events.
 
 Metal scale:

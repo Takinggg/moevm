@@ -8,7 +8,7 @@ Machine: MacBook Pro M5 Pro, 48GB RAM.
 
 ## Safety
 
-`gpt-oss-120b` Metal inference is still blocked on this Mac. Prior `-ngl` / FlashAttention tuning hit Metal OOM and a watchdog panic path. All tests below avoid gpt-oss Metal execution.
+`gpt-oss-120b` unsafe Metal shapes remain blocked on this Mac. Prior unconstrained `-ngl` / FlashAttention tuning hit Metal OOM and a watchdog panic path. The bounded MoEVM graph-pool path below now runs on Metal only through explicit `safe_run.py` gpt-oss gates, FlashAttention off, expert source tensors on CPU, and pressure-trim armed for scale tests.
 
 The validated path is:
 
@@ -199,7 +199,7 @@ Short logits comparisons:
 - CPU baseline vs MoEVM: 1 token/argmax mismatch at row 2, `max_abs=5.33`. This is not a MoEVM-only failure because CPU baseline vs Metal baseline shows the same token/argmax mismatch.
 - Metal baseline vs MoEVM: 0 token mismatches, 0 argmax mismatches, `max_abs=1.36`, `mean_abs=0.0705`. This is not bit-exact, likely because the baseline uses CPU expert matmuls while MoEVM copies selected experts into Metal pool tensors.
 
-Same-backend parity gate:
+Same-backend Metal-vs-Metal parity gate:
 
 | Run | Placement | Tokens | Decode tok/s | Result |
 |---|---|---:|---:|---|
@@ -212,6 +212,8 @@ Logits comparison, op-offload Metal baseline vs MoEVM graph pool:
 - Token mismatches: 0.
 - Argmax mismatches: 0.
 - `max_abs=0.0`, `mean_abs=0.0`, `rms_abs=0.0`.
+
+This is the discriminating correction test for the earlier `max_abs=1.36`: old op-offload Metal path vs MoEVM pool, same Metal backend and same MXFP4 dequant path. It rules out a graph-pool `ADD_ID` bias corruption on this tested path.
 
 Smoke/parity verdict: gpt-oss-120b Q4 now runs a bounded Metal/MoEVM decode on the Mac without jetsam/watchdog. The CPU-vs-Metal drift is real, but at backend-equal placement MoEVM is bit-exact over 64 decoded tokens, so the gpt-oss `ADD_ID` bias path is not currently corrupted by graph-pool.
 
@@ -261,7 +263,7 @@ This validates the core MoEVM thesis on a model larger than RAM: the runtime can
 
 Next gates:
 
-1. Decide whether to pursue cap32 for `ub=8`; do it only behind a new narrower safe-run gate and a load/decode smoke.
-2. Optimize the graph-pool rendez-vous path: fewer ids readbacks/callbacks matter more than larger arenas now.
-3. Run a longer soak after the next scheduler change.
+1. Run 6-8h launch soak with pressure trim armed and periodic logits snapshots.
+2. Freeze `moevm-launch-v0` if soak stays clean.
+3. Post-launch: optimize the graph-pool rendez-vous path; fewer ids readbacks/callbacks matter more than larger arenas now.
 4. Do not publish replay tok/s as a cold SSD number until a real `sudo purge` or reboot-cold protocol is run.
