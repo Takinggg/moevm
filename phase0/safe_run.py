@@ -253,6 +253,7 @@ def validate_gptoss_metal_gate(
     max_predict: int,
     max_arena_gib: float,
     require_pressure_trim_over_gib: float | None = None,
+    allow_carved_pool: bool = False,
 ) -> list[str]:
     errors: list[str] = []
     n_predict = flag_int(cmd, ["-n", "--predict", "--n-predict"])
@@ -281,8 +282,16 @@ def validate_gptoss_metal_gate(
             )
         if graph_mode != "pool":
             errors.append("gpt-oss Metal MoEVM gate requires --moevm-graph-mode pool")
-        if pool_capacity is not None and pool_capacity > 16:
-            errors.append("gpt-oss Metal MoEVM gate requires --moevm-pool-capacity <= 16 when set")
+        max_pool_capacity = 16
+        if allow_carved_pool and arena_gib is not None and arena_gib <= 16:
+            max_pool_capacity = 32
+        elif allow_carved_pool and arena_gib is not None and arena_gib <= 20:
+            max_pool_capacity = 24
+        if pool_capacity is not None and pool_capacity > max_pool_capacity:
+            errors.append(
+                "gpt-oss Metal MoEVM gate requires --moevm-pool-capacity <= "
+                f"{max_pool_capacity} for --moevm-arena-gib {arena_gib:g}"
+            )
     else:
         if "exps.weight=CPU" not in override:
             errors.append("gpt-oss Metal baseline gate requires expert weight CPU override")
@@ -322,7 +331,7 @@ def preflight(args: argparse.Namespace, cmd: list[str]) -> list[str]:
 
     if model_is_gptoss_120b and uses_metal_layers and not args.allow_known_unsafe:
         if args.allow_gptoss_metal_scale_gate:
-            errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 128, 24, 16))
+            errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 128, 24, 16, allow_carved_pool=True))
         elif args.allow_gptoss_metal_parity_gate:
             errors.extend(validate_gptoss_metal_gate(cmd, flash_on, 128, 16))
         elif args.allow_gptoss_metal_smoke:
