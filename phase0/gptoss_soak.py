@@ -239,6 +239,7 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "--",
         "/usr/bin/env",
         "GGML_OP_OFFLOAD_MIN_BATCH=1",
+        *(["MOEVM_METAL_TIMESTAMPS=1"] if args.metal_timestamps else []),
         str(LLAMA_MOE_TRACE),
         "-m",
         str(args.model),
@@ -325,6 +326,7 @@ def main() -> int:
     parser.add_argument("--max-rss-mib", type=float, default=42000)
     parser.add_argument("--max-wired-gib", type=float, default=38)
     parser.add_argument("--max-log-mb", type=float, default=96)
+    parser.add_argument("--metal-timestamps", action="store_true")
     parser.add_argument("--continue-on-failure", action="store_true")
     args = parser.parse_args()
 
@@ -349,6 +351,7 @@ def main() -> int:
         "ubatch": args.ubatch,
         "tokens": args.tokens,
         "logits_every": args.logits_every,
+        "metal_timestamps": args.metal_timestamps,
         "prompts": [{"name": p.name, "file": str(p.file) if p.file else None, "text": p.text} for p in PROMPTS],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
