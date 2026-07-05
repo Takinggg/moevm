@@ -311,6 +311,11 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "all",
         "--moevm-pool-capacity",
         str(args.pool_capacity),
+        *(
+            ["--moevm-pool-dynamic-extent"]
+            if args.pool_dynamic_extent
+            else []
+        ),
         "--moevm-graph-mode",
         "pool",
         "--moevm-no-integrity-check",
@@ -378,6 +383,7 @@ def main() -> int:
     parser.add_argument("--sidecar-cache", action="store_true")
     parser.add_argument("--direct-mmap", action="store_true")
     parser.add_argument("--pool-capacity", type=int, default=16)
+    parser.add_argument("--pool-dynamic-extent", action="store_true")
     parser.add_argument("--logits-every", type=int, default=20)
     parser.add_argument("--graph-fill-site", choices=("sched", "cb_eval"), default="sched")
     parser.add_argument("--seed-base", type=int, default=7000)
@@ -447,6 +453,7 @@ def main() -> int:
         "sidecar_cache": args.sidecar_cache,
         "direct_mmap": args.direct_mmap,
         "pool_capacity": args.pool_capacity,
+        "pool_dynamic_extent": args.pool_dynamic_extent,
         "logits_every": args.logits_every,
         "graph_fill_site": args.graph_fill_site,
         "metal_timestamps": args.metal_timestamps,
