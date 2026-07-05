@@ -97,9 +97,11 @@ def run_text(cmd: list[str], timeout: float = 20.0) -> str:
 
 def jetsam_snapshot(since: str, out_path: Path, fallback_minutes: int) -> None:
     predicate = (
-        'eventMessage CONTAINS[c] "Jetsam" OR '
-        'eventMessage CONTAINS[c] "memorystatus" OR '
-        'eventMessage CONTAINS[c] "jettisoned"'
+        'eventMessage CONTAINS[c] "JetsamEvent" OR '
+        'eventMessage CONTAINS[c] "jettisoned" OR '
+        'eventMessage CONTAINS[c] "memorystatus: killing" OR '
+        'eventMessage CONTAINS[c] "highwater" OR '
+        'eventMessage CONTAINS[c] "per-process-limit"'
     )
     cmd = ["log", "show", "--start", since, "--style", "compact", "--predicate", predicate]
     text = run_text(cmd, timeout=60.0)
