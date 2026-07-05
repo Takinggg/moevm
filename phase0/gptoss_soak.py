@@ -77,6 +77,18 @@ PRESSURE_RE = re.compile(
     r"MoEVM pressure_trim warn_events=(\d+) critical_events=(\d+) trim_calls=(\d+) "
     r"trim_records=(\d+) trim_bytes=([0-9.]+)GiB"
 )
+PHASE_RUNTIME_RE = re.compile(
+    r"MoEVM phase (\w+) runtime elapsed_us=(\d+) demand_reads=(\d+) prefetch_reads=(\d+) "
+    r"waits=(\d+) wait_s=([0-9.]+) evictions=(\d+) hits=(\d+) misses=(\d+) "
+    r"arena_used=([0-9.]+)GiB high_water=([0-9.]+)GiB reclaim=([0-9.]+)GiB reuse=([0-9.]+)GiB"
+)
+PHASE_BACKEND_RE = re.compile(
+    r"MoEVM phase (\w+) backend split_inputs=(\d+) user_inputs=(\d+) ids_refreshes=(\d+) "
+    r"attempts=(\d+) handled=(\d+) graph_patches=(\d+) graph_patch_restores=(\d+) "
+    r"backend_sync_calls=(\d+) backend_sync_us=(\d+) graph_compute_calls=(\d+) graph_compute_us=(\d+) "
+    r"ids_readback_calls=(\d+) ids_readback_us=(\d+) callback_us=(\d+) "
+    r"metal_cmd_buffers=(\d+) metal_gpu_busy_us=(\d+) metal_gpu_timestamp_missing=(\d+)"
+)
 ERROR_RE = re.compile(r"runtime_errors=(\d+)")
 
 
@@ -145,6 +157,50 @@ def parse_log(path: Path) -> dict:
                 "pressure_trim_gib": float(m.group(5)),
             }
         )
+    phases: dict[str, dict[str, object]] = {}
+    for m in PHASE_RUNTIME_RE.finditer(text):
+        phase = phases.setdefault(m.group(1), {})
+        phase.update(
+            {
+                "elapsed_us": int(m.group(2)),
+                "demand_reads": int(m.group(3)),
+                "prefetch_reads": int(m.group(4)),
+                "waits": int(m.group(5)),
+                "wait_s": float(m.group(6)),
+                "evictions": int(m.group(7)),
+                "hits": int(m.group(8)),
+                "misses": int(m.group(9)),
+                "arena_used_gib": float(m.group(10)),
+                "high_water_gib": float(m.group(11)),
+                "reclaim_gib": float(m.group(12)),
+                "reuse_gib": float(m.group(13)),
+            }
+        )
+    for m in PHASE_BACKEND_RE.finditer(text):
+        phase = phases.setdefault(m.group(1), {})
+        phase.update(
+            {
+                "split_inputs": int(m.group(2)),
+                "user_inputs": int(m.group(3)),
+                "ids_refreshes": int(m.group(4)),
+                "attempts": int(m.group(5)),
+                "handled": int(m.group(6)),
+                "graph_patches": int(m.group(7)),
+                "graph_patch_restores": int(m.group(8)),
+                "backend_sync_calls": int(m.group(9)),
+                "backend_sync_us": int(m.group(10)),
+                "graph_compute_calls": int(m.group(11)),
+                "graph_compute_us": int(m.group(12)),
+                "ids_readback_calls": int(m.group(13)),
+                "ids_readback_us": int(m.group(14)),
+                "callback_us": int(m.group(15)),
+                "metal_cmd_buffers": int(m.group(16)),
+                "metal_gpu_busy_us": int(m.group(17)),
+                "metal_gpu_timestamp_missing": int(m.group(18)),
+            }
+        )
+    if phases:
+        out["phases"] = phases
     errors = ERROR_RE.findall(text)
     if errors:
         out["runtime_errors"] = int(errors[-1])
