@@ -208,6 +208,16 @@ Graph-build scheduler hook validation:
 - Result after fusion: same-prompt normal graph-build reaches 19.76 tok/s; graph-build DFlash reaches 20.04 tok/s with accept 81.71%. Cap256 was tested and rejected despite zero pool evictions because it was slower on the n50 smoke.
 - Interpretation: graph-build no longer depends on op-offload or the old expert copy hook, and it keeps correctness under the moved drain point. Current throughput now matches the old audited DFlash headline while staying on the graph-build architecture. A.1 still shows the GPU is not saturated; the next gain must come from reducing ids readback/sync itself or reducing copied expert bytes, not just callback count.
 
+Active-k quality gate:
+
+- Harness: `moevm/phase0/qwen_activek_quality.py`.
+- Run: `moevm/runs/qwen_activek_quality_k8_k6_20260705/summary.md`.
+- Modes: base top-k, `--moevm-active-experts 8`, and `--moevm-active-experts 6` on five deterministic Python code-generation tasks.
+- Gate result: pass, with zero regressions on tasks passed by the base mode, zero demand reads, and zero runtime errors.
+- Base passed 2/5 tasks; active8 passed 3/5; active6 passed 3/5. Active modes preserved both base-passing tasks and improved `merge_sorted`, but did not make the hard tasks consistently reliable.
+- Average tok/s in the quality harness: base 12.30, active8 12.62 (+2.6%), active6 12.99 (+5.6%). These are trace/generation harness numbers, not headline throughput numbers.
+- Verdict: active-k is safe enough as an opt-in experimental Qwen quality/speed knob, but it should not be the default launch path.
+
 Fast non-MoEVM baseline:
 
 - Log: `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log`
