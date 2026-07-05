@@ -119,6 +119,8 @@ python3 moevm/phase0/validate_soak.py \
 - This is for routed MoE weights, not dense models.
 - It does not make a 1T dense model interactive on a 48 GB laptop.
 - Throughput is workload-dependent. Expert locality matters.
+- The launch proof is 58 GiB of source weights on 48 GB RAM, not an arbitrary
+  proof that every MoE can run at any RAM multiple.
 - Replay tok/s can be page-cache contaminated; publish live decode tok/s and
   correction gates instead.
 - Batch modes can be useful for aggregate throughput, but they may not produce
@@ -126,6 +128,36 @@ python3 moevm/phase0/validate_soak.py \
 - gpt-oss speculation is not part of the current launch path.
 - Unsafe gpt-oss Metal shapes remain blocked by `safe_run.py` after earlier OOM
   and watchdog failures on this machine.
+
+## Scaling Notes
+
+The current gpt-oss launch point is:
+
+- 58 GiB source model.
+- 56.88 GiB routed expert pool.
+- 1.57 GiB non-routed resident estimate.
+- 12.64 MiB per `(layer, expert)` record.
+- 4 active experts per token.
+- 24 GiB launch arena.
+
+Measured 512-token coding traces show that LRU is already close to offline
+optimal Belady on this workload. At 28 GiB, LRU hit rate is about 95.1-95.8% and
+Belady is about 97.1-97.5%. That means new cache policies are unlikely to be the
+main source of a large speedup. The better targets are prefetch timing,
+orchestration/readback, and reducing copied expert bytes.
+
+Rule of thumb for this implementation:
+
+- More RAM helps until the active expert working set fits.
+- Past that point, larger arenas can hurt by taking memory away from the OS page
+  cache and Metal working set.
+- Bigger-than-RAM MoE inference is viable when expert locality is high enough
+  and the active set per token stays small.
+- Dense models do not have this sparsity, so they do not get the same scaling
+  behavior.
+
+The current launch numbers should be read as a measured point in that scaling
+law, not as a universal promise for all MoE architectures.
 
 ## Launch Gates
 
@@ -152,3 +184,9 @@ The next large tok/s gains are measured but not yet all productized:
 - Demand-shaping/top-k quality gates after launch.
 
 See `moevm/launch/WOW_SPRINT.md` for the bounded pre-launch scope.
+
+## Launch Package
+
+- `moevm/launch/FAQ.md`
+- `moevm/launch/VIDEO_STORYBOARD.md`
+- `moevm/launch/POST_DRAFTS.md`
