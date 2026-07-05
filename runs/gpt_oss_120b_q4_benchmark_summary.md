@@ -248,6 +248,15 @@ Median-of-5 launch rerun, same real-context prompt and same `24 GiB`, `b=1 ub=1`
 - Demand reads: 0/5. Runtime errors: 0/5. Pressure events/trims: 0/5. Token prefix identical across all five runs.
 - Publishable launch number for this path is 8.72 tok/s median. The earlier 10-13 tok/s values remain valid single-run observations but should not be used as the headline.
 
+Parallel multi-agent decode, same real-context prompt, `c=4096`, `n=32` per sequence:
+
+| Mode | Arena | Batch | Parallel seqs | Aggregate tokens | Decode tok/s aggregate | Tok/s/seq | Decode Demand Reads | Runtime Errors |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| MoEVM parallel | 24 GiB | `b=4 ub=4` | 4 | 128 | 26.81 | 6.70 | 0 | 0 |
+
+Summary: `moevm/runs/gpt_oss_120b_parallel4_aggregate_20260705.md`.
+This reaches the 20-25+ tok/s band as aggregate throughput for multi-agent serving. It is not a single-stream latency number.
+
 Interpretation:
 
 - Larger arena fixes most I/O pressure on real context: demand reads 11 -> 0 and runtime wait 19.42s -> 6.80s.
