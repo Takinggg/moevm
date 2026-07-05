@@ -14,13 +14,12 @@ python3 moevm/phase0/gptoss_soak.py \
   --hours 6 \
   --tokens 64 \
   --logits-every 20 \
-  --out-dir moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached
+  --out-dir moevm/runs/gpt_oss_120b_launch_soak_final
 ```
 
-Current supervised run:
-
-- `screen` session: `moevm_gptoss_soak_6h`
-- driver PID file: `moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached/soak.pid`
+The first 6h attempt on 2026-07-05 was intentionally stopped after 44 clean
+iterations when the policy changed. Treat it as a pilot run. The final 6h soak
+must run only after the launch code path is frozen.
 
 ## Hard PASS Gates
 
@@ -28,9 +27,9 @@ Run:
 
 ```bash
 python3 moevm/phase0/validate_soak.py \
-  moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached \
+  moevm/runs/gpt_oss_120b_launch_soak_final \
   --final \
-  --json moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached/validation.json
+  --json moevm/runs/gpt_oss_120b_launch_soak_final/validation.json
 ```
 
 The result must be `status: pass`.
@@ -63,8 +62,8 @@ launch blocker.
 After the validator passes, inspect:
 
 ```bash
-cat moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached/summary.json
-tail -n 20 moevm/runs/gpt_oss_120b_launch_soak_20260705_6h_detached/results.jsonl
+cat moevm/runs/gpt_oss_120b_launch_soak_final/summary.json
+tail -n 20 moevm/runs/gpt_oss_120b_launch_soak_final/results.jsonl
 ```
 
 The manual review is not a chance to waive failures. It is only to understand

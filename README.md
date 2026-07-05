@@ -20,7 +20,7 @@ Machine: MacBook Pro M5 Pro, 48 GB RAM.
 | Model | Source size | Working RAM budget | Result | Correction gate |
 |---|---:|---:|---:|---|
 | Qwen3-Coder-Next Q4 | about 45 GiB | 48 GB MacBook | 4.24 tok/s stock op-offload -> 21.67-21.90 tok/s MoEVM graph-build | same-backend logits `max_abs=0.0`; jitter/fence validated |
-| gpt-oss-120b Q4_K_M | 58 GiB | 48 GB MacBook, arena 16-24 GiB | 11.44-13.34 tok/s short prompt; 9.94 tok/s at `c=4096` with 990 prompt tokens | Metal-vs-Metal op-offload baseline vs MoEVM `max_abs=0.0` over 64 rows |
+| gpt-oss-120b Q4_K_M | 58 GiB | 48 GB MacBook, arena 16-24 GiB | 11.44-13.34 tok/s short prompt; 9.5-10.4 tok/s at `c=4096` with about 990 prompt tokens | Metal-vs-Metal op-offload baseline vs MoEVM `max_abs=0.0` over 64 rows |
 
 The gpt-oss path is the launch proof: a 58 GiB MoE model decoding on a 48 GB
 laptop without loading the full routed expert pool into RAM.
