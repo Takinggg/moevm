@@ -20,6 +20,7 @@ Artifacts:
 - `runtime_smoke.cpp`: small runtime smoke test against a candidate trace.
 - `runtime_replay.cpp`: streaming replay through the reusable runtime API, used to compare API overhead with `pager_replay.cpp`.
 - `compare_decode_logs.py`: compares generated token IDs and decode/runtime stats between baseline and MoEVM llama-moe-trace logs.
+- `gptoss_activek_quality.py`: small generated-code gate for GPT-OSS active-expert demand shaping.
 - `prefetch_sim.py`: oracle lookahead simulator for upper-bound prefetch research.
 - `safe_run.py`: run risky benchmarks with memory and log guardrails.
 - `RUNBOOK.md`: exact commands for this Mac.
