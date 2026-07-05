@@ -46,6 +46,12 @@ def classify_routed_tensor(t: TensorInfo) -> tuple[int, str] | None:
 def build_plan(paths: list[Path], align_bytes: int, include_hash: bool) -> dict[str, Any]:
     meta, tensors, header = parse_ggufs(paths)
     arch = str(meta.get("general.architecture", "unknown"))
+    split_count = meta.get("split.count")
+    if isinstance(split_count, int) and split_count > 1 and int(header.get("shard_count", len(paths))) < split_count:
+        raise SystemExit(
+            f"incomplete GGUF shard set: metadata declares {split_count} splits but {header.get('shard_count', len(paths))} were provided; "
+            "run model_profile.py on the exact shard set before packing"
+        )
 
     expert_count = None
     for key, value in meta.items():
@@ -66,11 +72,20 @@ def build_plan(paths: list[Path], align_bytes: int, include_hash: bool) -> dict[
         file_sizes[header["path"]] = int(header["file_bytes_available"])
 
     routed: dict[tuple[int, str], TensorInfo] = {}
+    unsupported_routed_weights: list[str] = []
     for t in tensors:
         parsed = classify_routed_tensor(t)
         if parsed is None:
+            if t.category == "routed_expert" and t.name.endswith(".weight"):
+                unsupported_routed_weights.append(t.name)
             continue
         routed[parsed] = t
+    if unsupported_routed_weights:
+        examples = ", ".join(unsupported_routed_weights[:8])
+        raise SystemExit(
+            "unsupported routed expert tensor layout for sidecar plan v0; "
+            f"examples: {examples}; run model_profile.py and add a layout adapter before packing"
+        )
 
     layers = sorted({layer for layer, _ in routed})
     required_kinds = ["gate", "up", "down"]

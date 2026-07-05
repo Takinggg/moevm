@@ -7,6 +7,7 @@ Phase 0 answers one question before we write a pager:
 Artifacts:
 
 - `gguf_inspect.py`: parse GGUF headers in streaming mode, including truncated HTTP range downloads.
+- `model_profile.py`: classify a GGUF MoE layout and report which MoEVM modules are supported, blocked, or runtime-gated before packing.
 - `ssd_bench.py`: benchmark random reads at expert-slice size with optional macOS `F_NOCACHE`.
 - `cache_sim.py`: replay router traces against cache policies.
 - `sidecar_plan.py`: map `(layer, expert)` records to source GGUF tensor slices.
@@ -23,3 +24,23 @@ Artifacts:
 - `safe_run.py`: run risky benchmarks with memory and log guardrails.
 - `RUNBOOK.md`: exact commands for this Mac.
 - `LLAMA_INTEGRATION.md`: mapped llama.cpp integration boundary for the next phase.
+- `MODEL_CAPABILITIES.md`: compatibility contract for enabling MoEVM modules on new MoE LLM layouts.
+
+## Model Capability Gate
+
+MoEVM modules are capability-gated, not model-name-gated. Before building a
+sidecar or publishing a benchmark for a new LLM, run:
+
+```bash
+python3 moevm/phase0/model_profile.py \
+  path/to/model-00001.gguf path/to/model-00002.gguf \
+  --json moevm/runs/model_profile.json \
+  --md moevm/runs/model_profile.md
+```
+
+The current production path supports the split `gate/up/down` routed expert
+layout used by the validated Qwen/gpt-oss paths. Other MoE layouts, such as
+fused `gate_up` experts or custom routed tensors, must add a layout adapter and
+then rerun the same-backend logits gate before any tok/s claim.
+
+See `MODEL_CAPABILITIES.md` for the extension contract.

@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from model_profile import build_profile, markdown as model_profile_markdown
+
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "moevm/runs"
@@ -90,6 +92,7 @@ PHASE_BACKEND_RE = re.compile(
     r"metal_cmd_buffers=(\d+) metal_gpu_busy_us=(\d+) metal_gpu_timestamp_missing=(\d+)"
 )
 ERROR_RE = re.compile(r"runtime_errors=(\d+)")
+SPLIT_GGUF_RE = re.compile(r"^(?P<prefix>.+)-(?P<idx>\d{5})-of-(?P<count>\d{5})\.gguf$")
 
 
 def utc_now() -> str:
@@ -105,6 +108,18 @@ def run_text(cmd: list[str], timeout: float = 20.0) -> str:
         return subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT, timeout=timeout)
     except Exception as exc:
         return f"command failed: {exc}\n"
+
+
+def infer_model_shards(model: Path) -> list[Path]:
+    match = SPLIT_GGUF_RE.match(model.name)
+    if not match:
+        return [model]
+    expected = int(match.group("count"))
+    pattern = f"{match.group('prefix')}-*-of-{match.group('count')}.gguf"
+    shards = sorted(model.parent.glob(pattern))
+    if len(shards) == expected:
+        return shards
+    return [model]
 
 
 def jetsam_snapshot(since: str, out_path: Path, fallback_minutes: int) -> None:
@@ -321,6 +336,8 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, help="override duration and run exactly N iterations")
     parser.add_argument("--out-dir", type=Path, default=RUNS / "gpt_oss_120b_launch_soak")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
+    parser.add_argument("--profile-gguf", type=Path, nargs="*", help="GGUF shard set used for model_profile.py; defaults to inferred siblings of --model")
+    parser.add_argument("--skip-model-profile-gate", action="store_true", help="write the model profile but do not block unsupported graph-pool layouts")
     parser.add_argument("--index", type=Path, default=DEFAULT_INDEX)
     parser.add_argument("--component-index", type=Path, default=DEFAULT_COMPONENT_INDEX)
     parser.add_argument("--sidecar", type=Path, default=DEFAULT_SIDECAR)
@@ -359,6 +376,28 @@ def main() -> int:
     start_monotonic = time.monotonic()
     deadline = start_monotonic + args.hours * 3600.0
 
+    profile_paths = args.profile_gguf if args.profile_gguf is not None and len(args.profile_gguf) > 0 else infer_model_shards(args.model)
+    model_profile = build_profile(profile_paths, args.pool_capacity)
+    profile_json = args.out_dir / "model_profile.json"
+    profile_md = args.out_dir / "model_profile.md"
+    profile_json.write_text(json.dumps(model_profile, indent=2) + "\n", encoding="utf-8")
+    profile_md.write_text(model_profile_markdown(model_profile), encoding="utf-8")
+    graph_pool_status = model_profile["capabilities"]["graph_pool_v0"]["status"]
+    if graph_pool_status == "blocked" and not args.skip_model_profile_gate:
+        print(
+            json.dumps(
+                {
+                    "error": "model_profile blocked graph-pool for this model/layout",
+                    "profile_json": str(profile_json),
+                    "profile_md": str(profile_md),
+                    "reason": model_profile["capabilities"]["graph_pool_v0"]["reason"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return 2
+
     manifest = {
         "started_at": start_iso,
         "log_show_start": start_log_show,
@@ -380,6 +419,9 @@ def main() -> int:
         "logits_every": args.logits_every,
         "graph_fill_site": args.graph_fill_site,
         "metal_timestamps": args.metal_timestamps,
+        "model_profile": str(profile_json),
+        "model_profile_status": graph_pool_status,
+        "profile_gguf": [str(path) for path in profile_paths],
         "prompts": [{"name": p.name, "file": str(p.file) if p.file else None, "text": p.text} for p in PROMPTS],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

@@ -28,14 +28,16 @@ laptop without loading the full routed expert pool into RAM.
 ## How It Works
 
 1. Inspect the GGUF tensor table and identify routed expert tensors.
-2. Pack experts into a sidecar indexed by `(layer, expert, component)`.
-3. Build a persistent Metal pool and shadow ids for selected experts.
-4. Patch `MUL_MAT_ID` expert nodes in the graph to read from the pool.
-5. Fill the pool from the sidecar with LRU residency, candidate prefetch,
+2. Build a model capability profile so modules are enabled by tensor layout, not
+   by hardcoded model names.
+3. Pack experts into a sidecar indexed by `(layer, expert, component)`.
+4. Build a persistent Metal pool and shadow ids for selected experts.
+5. Patch `MUL_MAT_ID` expert nodes in the graph to read from the pool.
+6. Fill the pool from the sidecar with LRU residency, candidate prefetch,
    epochs, pinning, and atomic graph commits.
-6. Use `MADV_FREE_REUSABLE` plus pressure-triggered trimming to reduce macOS
+7. Use `MADV_FREE_REUSABLE` plus pressure-triggered trimming to reduce macOS
    footprint before jetsam pressure becomes fatal.
-7. Treat logits parity as the correctness gate, not only token matching.
+8. Treat logits parity as the correctness gate, not only token matching.
 
 For gpt-oss specifically, `ADD_ID` expert bias nodes are intentionally not
 rewritten; same-backend Metal-vs-Metal logits parity rules out the bias-corruption
@@ -118,6 +120,11 @@ python3 moevm/phase0/validate_soak.py \
 
 - This is for routed MoE weights, not dense models.
 - It does not make a 1T dense model interactive on a 48 GB laptop.
+- Current production packing supports split `gate/up/down` routed expert
+  tensors. Fused `gate_up` or custom expert layouts need a layout adapter before
+  graph-pool is enabled.
+- Every new model requires `model_profile.py` plus same-backend logits parity;
+  benchmarked models are examples, not hardcoded special cases.
 - Throughput is workload-dependent. Expert locality matters.
 - The launch proof is 58 GiB of source weights on 48 GB RAM, not an arbitrary
   proof that every MoE can run at any RAM multiple.
