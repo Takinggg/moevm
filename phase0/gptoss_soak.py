@@ -259,10 +259,20 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         str(args.prefetch_topk),
         "--moevm-copy-mode",
         str(args.copy_mode),
+        *(
+            ["--moevm-cache"]
+            if args.sidecar_cache
+            else []
+        ),
+        *(
+            ["--moevm-direct-mmap"]
+            if args.direct_mmap
+            else []
+        ),
         "--moevm-pool-layer",
         "all",
         "--moevm-pool-capacity",
-        "16",
+        str(args.pool_capacity),
         "--moevm-graph-mode",
         "pool",
         "--moevm-no-integrity-check",
@@ -324,6 +334,9 @@ def main() -> int:
     parser.add_argument("--moevm-threads", type=int, default=4)
     parser.add_argument("--prefetch-topk", type=int, default=4)
     parser.add_argument("--copy-mode", choices=("memcpy", "async"), default="memcpy")
+    parser.add_argument("--sidecar-cache", action="store_true")
+    parser.add_argument("--direct-mmap", action="store_true")
+    parser.add_argument("--pool-capacity", type=int, default=16)
     parser.add_argument("--logits-every", type=int, default=20)
     parser.add_argument("--graph-fill-site", choices=("sched", "cb_eval"), default="sched")
     parser.add_argument("--seed-base", type=int, default=7000)
@@ -361,6 +374,9 @@ def main() -> int:
         "moevm_threads": args.moevm_threads,
         "prefetch_topk": args.prefetch_topk,
         "copy_mode": args.copy_mode,
+        "sidecar_cache": args.sidecar_cache,
+        "direct_mmap": args.direct_mmap,
+        "pool_capacity": args.pool_capacity,
         "logits_every": args.logits_every,
         "graph_fill_site": args.graph_fill_site,
         "metal_timestamps": args.metal_timestamps,
@@ -395,6 +411,9 @@ def main() -> int:
                 "elapsed_s": elapsed,
                 "returncode": proc.returncode,
                 "copy_mode": args.copy_mode,
+                "sidecar_cache": args.sidecar_cache,
+                "direct_mmap": args.direct_mmap,
+                "pool_capacity": args.pool_capacity,
                 "graph_fill_site": args.graph_fill_site,
                 "log": str(log_path),
                 "safe_stdout": str(stdout_path),
