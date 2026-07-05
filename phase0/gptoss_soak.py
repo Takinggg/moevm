@@ -258,15 +258,13 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "--moevm-prefetch-topk",
         str(args.prefetch_topk),
         "--moevm-copy-mode",
-        "memcpy",
+        str(args.copy_mode),
         "--moevm-pool-layer",
         "all",
         "--moevm-pool-capacity",
         "16",
         "--moevm-graph-mode",
         "pool",
-        "--moevm-graph-fill-site",
-        str(args.graph_fill_site),
         "--moevm-no-integrity-check",
         "--moevm-pressure-trim",
         "--moevm-pressure-trim-step-gib",
@@ -299,6 +297,8 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         cmd += ["-f", str(prompt.file)]
     else:
         cmd += ["-p", prompt.text or ""]
+    if args.graph_fill_site != "sched":
+        cmd += ["--moevm-graph-fill-site", str(args.graph_fill_site)]
     if logits:
         cmd += ["--logits-out", str(logits_path)]
     cmd += ["--generated-out", str(generated)]
@@ -323,6 +323,7 @@ def main() -> int:
     parser.add_argument("--inflight-mib", type=float, default=64)
     parser.add_argument("--moevm-threads", type=int, default=4)
     parser.add_argument("--prefetch-topk", type=int, default=4)
+    parser.add_argument("--copy-mode", choices=("memcpy", "async"), default="memcpy")
     parser.add_argument("--logits-every", type=int, default=20)
     parser.add_argument("--graph-fill-site", choices=("sched", "cb_eval"), default="sched")
     parser.add_argument("--seed-base", type=int, default=7000)
@@ -359,6 +360,7 @@ def main() -> int:
         "inflight_mib": args.inflight_mib,
         "moevm_threads": args.moevm_threads,
         "prefetch_topk": args.prefetch_topk,
+        "copy_mode": args.copy_mode,
         "logits_every": args.logits_every,
         "graph_fill_site": args.graph_fill_site,
         "metal_timestamps": args.metal_timestamps,
@@ -392,6 +394,8 @@ def main() -> int:
                 "started_at": datetime.fromtimestamp(run_started, timezone.utc).isoformat(),
                 "elapsed_s": elapsed,
                 "returncode": proc.returncode,
+                "copy_mode": args.copy_mode,
+                "graph_fill_site": args.graph_fill_site,
                 "log": str(log_path),
                 "safe_stdout": str(stdout_path),
                 "logits": str(args.out_dir / f"iter_{iteration:05d}_{prompt.name}.logits") if take_logits else None,
