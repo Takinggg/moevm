@@ -122,6 +122,24 @@ def infer_model_shards(model: Path) -> list[Path]:
     return [model]
 
 
+def resolve_moevm_threads(setting: str, model_profile: dict) -> tuple[int, str]:
+    if setting != "auto":
+        try:
+            value = int(setting)
+        except ValueError as exc:
+            raise SystemExit("--moevm-threads must be a positive integer or 'auto'") from exc
+        if value <= 0:
+            raise SystemExit("--moevm-threads must be a positive integer or 'auto'")
+        return value, "explicit"
+
+    topk = model_profile.get("expert_used_count")
+    if isinstance(topk, int) and topk > 0 and topk <= 4:
+        return 2, "auto_topk_le_4"
+    if isinstance(topk, int) and topk > 0:
+        return min(4, max(2, topk)), "auto_topk_wide"
+    return 4, "auto_unknown_topk"
+
+
 def jetsam_snapshot(since: str, out_path: Path, fallback_minutes: int) -> None:
     predicate = (
         'eventMessage CONTAINS[c] "JetsamEvent" OR '
@@ -269,9 +287,14 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "--moevm-inflight-mib",
         str(args.inflight_mib),
         "--moevm-threads",
-        str(args.moevm_threads),
+        str(args.moevm_threads_resolved),
         "--moevm-prefetch-topk",
         str(args.prefetch_topk),
+        *(
+            ["--moevm-active-experts", str(args.active_experts)]
+            if args.active_experts >= 0
+            else []
+        ),
         "--moevm-copy-mode",
         str(args.copy_mode),
         *(
@@ -348,8 +371,9 @@ def main() -> int:
     parser.add_argument("--ubatch", type=int, default=1)
     parser.add_argument("--tokens", type=int, default=64)
     parser.add_argument("--inflight-mib", type=float, default=64)
-    parser.add_argument("--moevm-threads", type=int, default=4)
+    parser.add_argument("--moevm-threads", default="4", help="positive integer or 'auto'; auto uses model_profile top-k")
     parser.add_argument("--prefetch-topk", type=int, default=4)
+    parser.add_argument("--active-experts", type=int, default=-1, help="-1 keeps model top-k; 0 clears MOEVM_ACTIVE_EXPERTS; N clamps active MoE experts")
     parser.add_argument("--copy-mode", choices=("memcpy", "async"), default="memcpy")
     parser.add_argument("--sidecar-cache", action="store_true")
     parser.add_argument("--direct-mmap", action="store_true")
@@ -366,6 +390,8 @@ def main() -> int:
     parser.add_argument("--metal-timestamps", action="store_true")
     parser.add_argument("--continue-on-failure", action="store_true")
     args = parser.parse_args()
+    if args.active_experts < -1:
+        raise SystemExit("--active-experts must be -1, 0, or a positive integer")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     results_path = args.out_dir / "results.jsonl"
@@ -397,6 +423,8 @@ def main() -> int:
             flush=True,
         )
         return 2
+    args.moevm_threads_requested = args.moevm_threads
+    args.moevm_threads_resolved, args.moevm_threads_policy = resolve_moevm_threads(args.moevm_threads, model_profile)
 
     manifest = {
         "started_at": start_iso,
@@ -410,8 +438,11 @@ def main() -> int:
         "ubatch": args.ubatch,
         "tokens": args.tokens,
         "inflight_mib": args.inflight_mib,
-        "moevm_threads": args.moevm_threads,
+        "moevm_threads": args.moevm_threads_resolved,
+        "moevm_threads_requested": args.moevm_threads_requested,
+        "moevm_threads_policy": args.moevm_threads_policy,
         "prefetch_topk": args.prefetch_topk,
+        "active_experts": args.active_experts,
         "copy_mode": args.copy_mode,
         "sidecar_cache": args.sidecar_cache,
         "direct_mmap": args.direct_mmap,
@@ -456,6 +487,9 @@ def main() -> int:
                 "sidecar_cache": args.sidecar_cache,
                 "direct_mmap": args.direct_mmap,
                 "pool_capacity": args.pool_capacity,
+                "moevm_threads": args.moevm_threads_resolved,
+                "moevm_threads_policy": args.moevm_threads_policy,
+                "active_experts": args.active_experts,
                 "graph_fill_site": args.graph_fill_site,
                 "log": str(log_path),
                 "safe_stdout": str(stdout_path),
