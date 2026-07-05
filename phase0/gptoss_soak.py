@@ -252,11 +252,11 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "--moevm-arena-gib",
         str(args.arena_gib),
         "--moevm-inflight-mib",
-        "64",
+        str(args.inflight_mib),
         "--moevm-threads",
-        "4",
+        str(args.moevm_threads),
         "--moevm-prefetch-topk",
-        "4",
+        str(args.prefetch_topk),
         "--moevm-copy-mode",
         "memcpy",
         "--moevm-pool-layer",
@@ -265,6 +265,8 @@ def build_command(args: argparse.Namespace, prompt: Prompt, run_dir: Path, itera
         "16",
         "--moevm-graph-mode",
         "pool",
+        "--moevm-graph-fill-site",
+        str(args.graph_fill_site),
         "--moevm-no-integrity-check",
         "--moevm-pressure-trim",
         "--moevm-pressure-trim-step-gib",
@@ -318,7 +320,11 @@ def main() -> int:
     parser.add_argument("--batch", type=int, default=1)
     parser.add_argument("--ubatch", type=int, default=1)
     parser.add_argument("--tokens", type=int, default=64)
+    parser.add_argument("--inflight-mib", type=float, default=64)
+    parser.add_argument("--moevm-threads", type=int, default=4)
+    parser.add_argument("--prefetch-topk", type=int, default=4)
     parser.add_argument("--logits-every", type=int, default=20)
+    parser.add_argument("--graph-fill-site", choices=("sched", "cb_eval"), default="sched")
     parser.add_argument("--seed-base", type=int, default=7000)
     parser.add_argument("--per-run-timeout", type=float, default=900)
     parser.add_argument("--preflight-min-free-pct", type=float, default=25)
@@ -350,7 +356,11 @@ def main() -> int:
         "batch": args.batch,
         "ubatch": args.ubatch,
         "tokens": args.tokens,
+        "inflight_mib": args.inflight_mib,
+        "moevm_threads": args.moevm_threads,
+        "prefetch_topk": args.prefetch_topk,
         "logits_every": args.logits_every,
+        "graph_fill_site": args.graph_fill_site,
         "metal_timestamps": args.metal_timestamps,
         "prompts": [{"name": p.name, "file": str(p.file) if p.file else None, "text": p.text} for p in PROMPTS],
     }
