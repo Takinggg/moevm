@@ -363,6 +363,7 @@ def main() -> int:
     parser.add_argument("--hours", type=float, default=6.0)
     parser.add_argument("--iterations", type=int, help="override duration and run exactly N iterations")
     parser.add_argument("--out-dir", type=Path, default=RUNS / "gpt_oss_120b_launch_soak")
+    parser.add_argument("--prompt-names", help="comma-separated subset of built-in prompts to run")
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--profile-gguf", type=Path, nargs="*", help="GGUF shard set used for model_profile.py; defaults to inferred siblings of --model")
     parser.add_argument("--skip-model-profile-gate", action="store_true", help="write the model profile but do not block unsupported graph-pool layouts")
@@ -398,6 +399,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.active_experts < -1:
         raise SystemExit("--active-experts must be -1, 0, or a positive integer")
+    prompts = PROMPTS
+    if args.prompt_names:
+        requested_prompt_names = [name for name in args.prompt_names.split(",") if name]
+        requested_prompt_set = set(requested_prompt_names)
+        prompts = [prompt for prompt in PROMPTS if prompt.name in requested_prompt_set]
+        missing_prompt_names = [name for name in requested_prompt_names if name not in {prompt.name for prompt in prompts}]
+        if missing_prompt_names:
+            raise SystemExit("unknown --prompt-names: " + ",".join(missing_prompt_names))
+        if not prompts:
+            raise SystemExit("--prompt-names selected no prompts")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     results_path = args.out_dir / "results.jsonl"
@@ -460,7 +471,7 @@ def main() -> int:
         "model_profile": str(profile_json),
         "model_profile_status": graph_pool_status,
         "profile_gguf": [str(path) for path in profile_paths],
-        "prompts": [{"name": p.name, "file": str(p.file) if p.file else None, "text": p.text} for p in PROMPTS],
+        "prompts": [{"name": p.name, "file": str(p.file) if p.file else None, "text": p.text} for p in prompts],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -474,7 +485,7 @@ def main() -> int:
             elif time.monotonic() >= deadline:
                 break
 
-            prompt = PROMPTS[iteration % len(PROMPTS)]
+            prompt = prompts[iteration % len(prompts)]
             take_logits = args.logits_every > 0 and iteration % args.logits_every == 0
             cmd = build_command(args, prompt, args.out_dir, iteration, take_logits)
             stdout_path = args.out_dir / f"iter_{iteration:05d}_{prompt.name}.safe_stdout"

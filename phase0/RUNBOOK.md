@@ -1337,6 +1337,6 @@ Best current paging point:
 Interpretation:
 
 - This is now full bounded gpt-oss Metal/MoEVM inference on this Mac, not just replay: 56.88GiB of routed experts, selected expert paging, same-backend bit-exact gates, no jetsam/watchdog in bounded runs.
-- Current publishable interactive number is conservative: 9.94 tok/s on `c=4096`, 990-token prompt, `n=128`, arena 24GiB, `b=1 ub=1`, same-backend correctness preserved.
+- Current publishable interactive number is the median-of-5 launch rerun: 8.72 tok/s on `c=4096`, 990-token prompt, `n=128`, arena 24GiB, `b=1 ub=1`, with zero demand reads, zero runtime errors, zero pressure events, and stable output prefix. The earlier 9.94 tok/s is a valid single-run observation, not the launch headline.
 - Current best throughput mode for real context is `b=4 ub=4` at 64.05s wall for prompt+128 decode, but it changes the token stream relative to `b=1`; label it batch mode.
 - Next engineering target is scheduler/readback reduction. Larger arena alone is no longer the main lever.

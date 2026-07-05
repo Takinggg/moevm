@@ -239,6 +239,15 @@ Real-context prompt, `c=4096`, 990 prompt tokens from `prompt_observability_512p
 | MoEVM | 24 GiB | `b=1 ub=1` | 76.42 | 9.94 | 0 | 5,279 | 6.80 | 3,330 | `max_abs=0.0` vs 16 GiB |
 | MoEVM | 24 GiB | `b=4 ub=4` | 64.05 | 10.19 | 360 | 5,070 | 5.49 | 3,481 | Batch mode |
 
+Median-of-5 launch rerun, same real-context prompt and same `24 GiB`, `b=1 ub=1`, `n=128` shape:
+
+- Summary: `moevm/runs/gpt_oss_120b_median5_observability_24g_20260705.md`.
+- Decode tok/s runs: 8.72, 10.64, 10.17, 7.65, 7.87.
+- Median decode throughput: 8.72 tok/s; range 7.65-10.64 tok/s.
+- Median wall time: 88.59 s; median decode time: 14.67 s.
+- Demand reads: 0/5. Runtime errors: 0/5. Pressure events/trims: 0/5. Token prefix identical across all five runs.
+- Publishable launch number for this path is 8.72 tok/s median. The earlier 10-13 tok/s values remain valid single-run observations but should not be used as the headline.
+
 Interpretation:
 
 - Larger arena fixes most I/O pressure on real context: demand reads 11 -> 0 and runtime wait 19.42s -> 6.80s.
