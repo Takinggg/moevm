@@ -11,20 +11,21 @@ token ids and counters are untouched.
 
 ## Qwen3-Coder-Next Q4_K_M (45.2 GiB GGUF)
 
-All three runs use the same prompt (`def add(a, b): return a + b`), `-c 192`,
-`-b 1 -ub 1`, `--temp 0 -s 1`, `-ngl 99` with routed experts overridden to CPU.
-Decode lengths differ (92 tokens until EOS, 100, and 50). MoEVM and the stock
+All three runs use the same fork binary with MoEVM on or off, the same prompt
+(`def add(a, b): return a + b`), `-c 192`, `-b 1 -ub 1`, `--temp 0 -s 1`, and
+`-ngl 99` with routed experts overridden to CPU.
+Decode lengths differ (92 tokens until EOS, 100, and 50). MoEVM and the
 `--op-offload` run generate identical token ids over their 50 shared tokens.
 The `--no-op-offload` run computes routed experts on the CPU instead of Metal,
 so its numerics differ and its output diverges from the other two at token 39.
 
 | File | What it shows |
 |---|---|
-| `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | Stock llama.cpp with `--op-offload`: 4.24 tok/s |
+| `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | llama.cpp `--op-offload`, MoEVM off: 4.24 tok/s |
 | `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log` | Best configuration without MoEVM (`--no-op-offload`, CPU experts): 10.90 tok/s |
 | `qwen3_next_q4_graph_sched_c192_n50.log` | MoEVM graph-build pool, cap 128: 21.90 tok/s, `runtime_errors=0` |
 | `qwen3_next_q4_graph_parity_off_vs_sched_n50.json` | Graph pool off vs on: 50 rows, `max_abs=0.0`, zero token/argmax mismatches |
-| `../qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json` | Stock llama.cpp vs MoEVM: 1024 rows, `max_abs=0.0`, zero token/argmax mismatches |
+| `../qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json` | MoEVM off vs on, earlier P0.d path: 1024 rows, `max_abs=0.0`, zero token/argmax mismatches |
 
 ## gpt-oss-120b Q4_K_M (58 GiB GGUF, 2 shards)
 

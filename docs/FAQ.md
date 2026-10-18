@@ -44,8 +44,8 @@ drop-in replacement.
 
 The published figure is 8.72 tok/s: the median of five runs at a 4096-token
 context with a 990-token prompt
-(`runs/gpt_oss_120b_median5_observability_24g_20260705.md`). Earlier single
-runs on shorter prompts were faster and are not the reference number.
+(`runs/gpt_oss_120b_median5_observability_24g_20260705.md`). The best earlier
+single runs were faster and are not the reference number.
 
 The bottleneck is not raw model size alone. On gpt-oss, a timestamp diagnostic
 showed low GPU busy time and high orchestration/readback cost, and the median
