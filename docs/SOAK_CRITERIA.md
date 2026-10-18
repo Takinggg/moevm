@@ -1,4 +1,8 @@
-# MoEVM Launch Criteria
+# MoEVM Soak Criteria
+
+> Status: the final 6-hour soak described below has **not been run**. The gates
+> are kept exactly as they were declared, so a future run is judged against
+> criteria written before any result existed.
 
 Declared before reading the final launch-soak summary.
 
