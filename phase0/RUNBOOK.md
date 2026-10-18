@@ -39,7 +39,7 @@ Allowed next steps:
 - Route tracing on smaller/lab models first.
 - Cache simulation.
 - Controlled CPU-expert arena prototype that avoids large Metal residency.
-- Run risky commands only through `moevm/phase0/safe_run.py`.
+- Run risky commands only through `phase0/safe_run.py`.
 
 Blocked for now:
 
@@ -53,9 +53,9 @@ Blocked for now:
 Use `safe_run.py` for every risky benchmark or prototype run:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/<run>.log \
-  --summary moevm/runs/<run>.summary \
+python3 phase0/safe_run.py \
+  --log runs/<run>.log \
+  --summary runs/<run>.summary \
   --max-seconds 600 \
   --min-free-pct 8 \
   --max-wired-gib 34 \
@@ -128,19 +128,19 @@ curl -sL "https://huggingface.co/api/models/unsloth/Qwen3-Coder-Next-GGUF/tree/m
 Download only the first 64MiB of a GGUF:
 
 ```bash
-mkdir -p moevm/phase0/headers
+mkdir -p phase0/headers
 curl -L -r 0-67108863 \
-  -o moevm/phase0/headers/qwen3-coder-next-q4km.head.gguf \
+  -o phase0/headers/qwen3-coder-next-q4km.head.gguf \
   "https://huggingface.co/unsloth/Qwen3-Coder-Next-GGUF/resolve/main/Qwen3-Coder-Next-Q4_K_M.gguf"
-python3 moevm/phase0/gguf_inspect.py \
-  moevm/phase0/headers/qwen3-coder-next-q4km.head.gguf \
-  --json moevm/phase0/headers/qwen3-coder-next-q4km.inspect.json
+python3 phase0/gguf_inspect.py \
+  phase0/headers/qwen3-coder-next-q4km.head.gguf \
+  --json phase0/headers/qwen3-coder-next-q4km.inspect.json
 ```
 
 If the tensor-info table is larger than 64MiB, repeat with 128MiB:
 
 ```bash
-curl -L -r 0-134217727 -o moevm/phase0/headers/q4.head128.gguf "<GGUF_URL>"
+curl -L -r 0-134217727 -o phase0/headers/q4.head128.gguf "<GGUF_URL>"
 ```
 
 ## Build llama.cpp Native Metal
@@ -189,39 +189,39 @@ This template is for lab models such as Qwen3-Coder-Next Q3, not for `gpt-oss-12
 ```bash
 B=external/llama.cpp/build/bin
 M=~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf
-mkdir -p moevm/runs
+mkdir -p runs
 
 $B/llama-bench -m "$M" -fa 1 -p 2048 -n 128 -r 3 --no-warmup -o md \
-  | tee moevm/runs/q3_bench.md
+  | tee runs/q3_bench.md
 
 # `llama-bench` uses -ncmoe / --n-cpu-moe rather than --cpu-moe.
 # To test MoE CPU placement for all 48 layers:
 $B/llama-bench -m "$M" -fa 1 -p 2048 -n 128 -r 3 --no-warmup -o md -ncmoe 48 \
-  | tee moevm/runs/q3_bench_ncpu_moe.md
+  | tee runs/q3_bench_ncpu_moe.md
 
 /usr/bin/time -l $B/llama-cli -m "$M" -ngl 99 -fa on -c 8192 \
   -ctk q8_0 -ctv q8_0 --no-warmup -n 256 \
   -p "Write a concise Python function that parses key=value lines." \
-  2>&1 | tee moevm/runs/q3_cli.log
+  2>&1 | tee runs/q3_cli.log
 
 # `llama-cli` exposes -cmoe / --cpu-moe:
 /usr/bin/time -l $B/llama-cli -m "$M" -ngl 99 -fa on -c 8192 \
   -ctk q8_0 -ctv q8_0 --no-warmup --cpu-moe -n 256 \
   -p "Write a concise Python function that parses key=value lines." \
-  2>&1 | tee moevm/runs/q3_cli_cpu_moe.log
+  2>&1 | tee runs/q3_cli_cpu_moe.log
 ```
 
 In parallel:
 
 ```bash
-iostat -d disk0 1 | tee moevm/runs/q3_iostat.log
-vm_stat 5 | tee moevm/runs/q3_vmstat.log
+iostat -d disk0 1 | tee runs/q3_iostat.log
+vm_stat 5 | tee runs/q3_vmstat.log
 ```
 
 Measure SSD random reads once a GGUF is downloaded:
 
 ```bash
-python3 moevm/phase0/ssd_bench.py "$M" --size-mb 2 --threads 6
+python3 phase0/ssd_bench.py "$M" --size-mb 2 --threads 6
 ```
 
 ## MoE Route Tracing
@@ -241,13 +241,13 @@ Trace output format is JSONL:
 Always run trace jobs through `safe_run.py`:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/<name>.log \
-  --summary moevm/runs/<name>.summary \
+python3 phase0/safe_run.py \
+  --log runs/<name>.log \
+  --summary runs/<name>.summary \
   --max-seconds 600 \
   --max-rss-mib 16000 \
   -- external/llama.cpp/build/bin/llama-moe-trace \
-    --trace-out moevm/runs/<name>.jsonl \
+    --trace-out runs/<name>.jsonl \
     -m /path/to/model.gguf \
     -ngl 0 -c 512 -b 64 -ub 64 \
     -p "def quicksort(arr):"
@@ -262,8 +262,8 @@ Validation run:
 - Prompt tokens traced: 5.
 - Records: 155.
 - Explanation: this model has 32 layers, but only layers 0-30 emitted `ffn_moe_topk`, so integrity is `tokens × routed_layers`, not `tokens × total_layers`.
-- Trace: `moevm/runs/mistral_2x_moe_trace.jsonl`.
-- Cache sim: `moevm/runs/mistral_2x_moe_cache_sim.json`.
+- Trace: `runs/mistral_2x_moe_trace.jsonl`.
+- Cache sim: `runs/mistral_2x_moe_cache_sim.json`.
 
 This lab model is not a useful MoEVM target because it has 2 active experts out of 2. It only validates the trace hook and downstream simulator.
 
@@ -272,13 +272,13 @@ Qwen3-Coder-Next Q3 validation:
 - Model: `$MOEVM_MODELS_DIR/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf`
 - Mode: CPU-only, `-ngl 0 --no-repack`.
 - Correct trace runs use `-b 16 -ub 16`.
-- Summary: `moevm/runs/qwen3_next_q3_trace_summary.md`.
+- Summary: `runs/qwen3_next_q3_trace_summary.md`.
 - Observed routed layers: 47 (`layers 0-46`; layer 47 emitted no `ffn_moe_topk`).
 - Three short coding traces project about 20-23 sync tok/s with an 8GiB LRU arena under the current 5GB/s SSD assumption.
 
 Packed sidecar replay:
 
-- Plan: `moevm/runs/qwen3_next_q3_sidecar_plan.json`.
+- Plan: `runs/qwen3_next_q3_sidecar_plan.json`.
 - Packed file: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm`.
 - Records: 24,576 = 48 layers x 512 experts.
 - Payload: 31.35GiB.
@@ -293,10 +293,10 @@ Packed sidecar replay:
 
 Native C++ pager replay:
 
-- Indexer: `moevm/phase0/sidecar_index.py`.
+- Indexer: `phase0/sidecar_index.py`.
 - Index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.idx`, 393,272 bytes.
-- Source: `moevm/phase0/pager_replay.cpp`.
-- Binary: `moevm/phase0/pager_replay`.
+- Source: `phase0/pager_replay.cpp`.
+- Binary: `phase0/pager_replay`.
 - Mode: sync `pread` from packed sidecar with the same LRU policy as Python.
 - Results at 8GiB arena:
   - `code2_b16`: 0.336s, 208.1 replay tok/s, 31.70GB/s, hit 0.763.
@@ -333,7 +333,7 @@ Arena allocator model:
 
 Long trace predictor gate:
 
-- Long trace: `moevm/runs/qwen3_next_q3_trace_code_long1.jsonl`.
+- Long trace: `runs/qwen3_next_q3_trace_code_long1.jsonl`.
 - Prompt tokens: 633.
 - Records: 29,751.
 - Expert accesses: 297,510.
@@ -369,17 +369,17 @@ Router candidate trace:
 - It captures `ffn_moe_argsort` candidate expert IDs in addition to `ffn_moe_topk`.
 - Candidate records are emitted as `{"kind":"candidates","token":...,"layer":...,"candidates":[...]}`.
 - Existing topk records keep the old format: `{"token":...,"layer":...,"experts":[...]}`.
-- Smoke file: `moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl`.
+- Smoke file: `runs/qwen3_next_q3_trace_candidates_smoke.jsonl`.
 - Smoke result: 13 prompt tokens, 611 topk records, 611 candidate records, 47 routed layers/token, 32 candidates/record.
-- Long candidate trace: `moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`.
+- Long candidate trace: `runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`.
 - Long candidate result: 633 prompt tokens, 29,751 topk records, 29,751 candidate records, 16 candidates/record, 35.28s trace runtime.
 
 Candidate trace command:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_trace_candidates_smoke.log \
-  --summary moevm/runs/qwen3_next_q3_trace_candidates_smoke.summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_trace_candidates_smoke.log \
+  --summary runs/qwen3_next_q3_trace_candidates_smoke.summary \
   --max-seconds 180 \
   --preflight-min-free-pct 50 \
   --min-free-pct 20 \
@@ -387,7 +387,7 @@ python3 moevm/phase0/safe_run.py \
   --max-wired-gib 34 \
   --max-log-mb 8 \
   -- external/llama.cpp/build/bin/llama-moe-trace \
-    --trace-out moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
+    --trace-out runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
     --trace-candidates 32 \
     -m ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
     -ngl 0 --no-repack -c 256 -b 16 -ub 16 \
@@ -411,7 +411,7 @@ Candidate-aware replay:
 
 Oracle prefetch simulation:
 
-- Tool: `moevm/phase0/prefetch_sim.py`.
+- Tool: `phase0/prefetch_sim.py`.
 - This is an upper bound, not a real decoder guarantee.
 - At 8GiB arena, a 47-access lookahead nearly eliminates blocking demand reads on the three Qwen3Next Q3 traces:
   - `code2_b16`: demand misses 7,792 -> 2; demand MB/token 152.364 -> 0.039.
@@ -423,85 +423,85 @@ Oracle prefetch simulation:
 Sidecar commands:
 
 ```bash
-python3 moevm/phase0/sidecar_plan.py \
+python3 phase0/sidecar_plan.py \
   --model ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
-  --tensors-json moevm/runs/qwen3_next_q3_tensors.json \
-  --out moevm/runs/qwen3_next_q3_sidecar_plan.json
+  --tensors-json runs/qwen3_next_q3_tensors.json \
+  --out runs/qwen3_next_q3_sidecar_plan.json
 
-python3 moevm/phase0/sidecar_pack.py \
-  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+python3 phase0/sidecar_pack.py \
+  --plan runs/qwen3_next_q3_sidecar_plan.json \
   --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
-  --summary moevm/runs/qwen3_next_q3_pack_full.json \
+  --summary runs/qwen3_next_q3_pack_full.json \
   --nocache \
   --progress-every 2048
 
-python3 moevm/phase0/sidecar_replay.py \
-  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
-  --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+python3 phase0/sidecar_replay.py \
+  --plan runs/qwen3_next_q3_sidecar_plan.json \
+  --trace runs/qwen3_next_q3_trace_code2_b16.jsonl \
   --budget-gib 8 \
   --packed ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
   --nocache \
-  --out moevm/runs/qwen3_next_q3_replay_code2_b16_8g_packed.json
+  --out runs/qwen3_next_q3_replay_code2_b16_8g_packed.json
 ```
 
 Native index + replay commands:
 
 ```bash
-python3 moevm/phase0/sidecar_index.py \
-  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+python3 phase0/sidecar_index.py \
+  --plan runs/qwen3_next_q3_sidecar_plan.json \
   --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx
 
 clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
-  moevm/phase0/pager_replay.cpp \
-  -o moevm/phase0/pager_replay
+  phase0/pager_replay.cpp \
+  -o phase0/pager_replay
 
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.log \
-  --summary moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.safe_summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_pager_cpp_code2_b16_8g.log \
+  --summary runs/qwen3_next_q3_pager_cpp_code2_b16_8g.safe_summary \
   --max-seconds 300 \
   --preflight-min-free-pct 50 \
   --min-free-pct 20 \
   --max-rss-mib 2000 \
   --max-log-mb 8 \
-  -- moevm/phase0/pager_replay \
+  -- phase0/pager_replay \
     --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
     --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
-    --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+    --trace runs/qwen3_next_q3_trace_code2_b16.jsonl \
     --budget-gib 8 \
     --nocache \
-    --out moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g.json
+    --out runs/qwen3_next_q3_pager_cpp_code2_b16_8g.json
 ```
 
 Async prefetch replay command:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.log \
-  --summary moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.safe_summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.log \
+  --summary runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.safe_summary \
   --max-seconds 300 \
   --preflight-min-free-pct 50 \
   --min-free-pct 20 \
   --max-rss-mib 2000 \
   --max-log-mb 8 \
-  -- moevm/phase0/pager_replay \
+  -- phase0/pager_replay \
     --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
     --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
-    --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+    --trace runs/qwen3_next_q3_trace_code2_b16.jsonl \
     --budget-gib 8 \
     --prefetch-window 47 \
     --prefetch-threads 4 \
     --prefetch-max-inflight-mib 64 \
     --compute-us-per-access 5 \
     --nocache \
-    --out moevm/runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.json
+    --out runs/qwen3_next_q3_pager_cpp_code2_b16_8g_pf47_c5_t4.json
 ```
 
 Native runtime API smoke:
 
-- Source: `moevm/phase0/moevm_runtime.hpp`, `moevm/phase0/moevm_runtime.cpp`.
-- Smoke source: `moevm/phase0/runtime_smoke.cpp`.
-- Runtime replay source: `moevm/phase0/runtime_replay.cpp`.
-- Component indexer: `moevm/phase0/sidecar_component_index.py`.
+- Source: `phase0/moevm_runtime.hpp`, `phase0/moevm_runtime.cpp`.
+- Smoke source: `phase0/runtime_smoke.cpp`.
+- Runtime replay source: `phase0/runtime_replay.cpp`.
+- Component indexer: `phase0/sidecar_component_index.py`.
 - Component index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.cidx`, 589,880 bytes.
 - Contract: `prefetch_candidates(layer, candidates)` then `wait_selected(layer, expert)` returns a resident record pointer in the RAM arena; `component_view(record, Gate/Up/Down)` returns tensor-specific slices inside that resident record.
 - Smoke result on the candidate trace: 10 selected experts, 10 served from prefetch, 0 demand reads, 0 evictions, 13,598,720 bytes high-water.
@@ -513,32 +513,32 @@ Build:
 
 ```bash
 clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
-  moevm/phase0/moevm_runtime.cpp \
-  moevm/phase0/runtime_smoke.cpp \
-  -o moevm/phase0/runtime_smoke
+  phase0/moevm_runtime.cpp \
+  phase0/runtime_smoke.cpp \
+  -o phase0/runtime_smoke
 ```
 
 Run:
 
 ```bash
-python3 moevm/phase0/sidecar_component_index.py \
-  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
+python3 phase0/sidecar_component_index.py \
+  --plan runs/qwen3_next_q3_sidecar_plan.json \
   --out ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx
 
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_runtime_smoke.log \
-  --summary moevm/runs/qwen3_next_q3_runtime_smoke.safe_summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_runtime_smoke.log \
+  --summary runs/qwen3_next_q3_runtime_smoke.safe_summary \
   --max-seconds 60 \
   --preflight-min-free-pct 20 \
   --min-free-pct 15 \
   --max-rss-mib 1000 \
   --max-wired-gib 34 \
   --max-log-mb 8 \
-  -- moevm/phase0/runtime_smoke \
+  -- phase0/runtime_smoke \
     --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
     --component-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx \
     --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
-    --trace moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
+    --trace runs/qwen3_next_q3_trace_candidates_smoke.jsonl \
     --arena-mib 64 \
     --inflight-mib 16 \
     --threads 2 \
@@ -549,32 +549,32 @@ Runtime replay build:
 
 ```bash
 clang++ -O3 -std=c++17 -Wall -Wextra -pedantic \
-  moevm/phase0/moevm_runtime.cpp \
-  moevm/phase0/runtime_replay.cpp \
-  -o moevm/phase0/runtime_replay
+  phase0/moevm_runtime.cpp \
+  phase0/runtime_replay.cpp \
+  -o phase0/runtime_replay
 ```
 
 Runtime replay long trace:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.log \
-  --summary moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.safe_summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.log \
+  --summary runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.safe_summary \
   --max-seconds 240 \
   --preflight-min-free-pct 20 \
   --min-free-pct 15 \
   --max-rss-mib 14000 \
   --max-wired-gib 34 \
   --max-log-mb 8 \
-  -- moevm/phase0/runtime_replay \
+  -- phase0/runtime_replay \
     --index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
     --sidecar ~/models/qwen3-coder-next/qwen3-next-q3.moevm \
-    --trace moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl \
+    --trace runs/qwen3_next_q3_trace_code_long1_candidates.jsonl \
     --budget-gib 8 \
     --prefetch-max-inflight-mib 64 \
     --prefetch-threads 4 \
     --candidate-topk 10 \
-    --out moevm/runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.json
+    --out runs/qwen3_next_q3_runtime_replay_long1_cand10_8g.json
 ```
 
 Runtime replay long result:
@@ -602,12 +602,12 @@ Comparison against `pager_replay.cpp` candidate top10:
 Oracle prefetch command:
 
 ```bash
-python3 moevm/phase0/prefetch_sim.py \
-  --plan moevm/runs/qwen3_next_q3_sidecar_plan.json \
-  --trace moevm/runs/qwen3_next_q3_trace_code2_b16.jsonl \
+python3 phase0/prefetch_sim.py \
+  --plan runs/qwen3_next_q3_sidecar_plan.json \
+  --trace runs/qwen3_next_q3_trace_code2_b16.jsonl \
   --budget-gib 8 \
   --windows 0,47,470,1880 \
-  --out moevm/runs/qwen3_next_q3_prefetch_code2_b16_8g.json
+  --out runs/qwen3_next_q3_prefetch_code2_b16_8g.json
 ```
 
 ## Cache Simulator
@@ -621,9 +621,9 @@ Expected trace JSONL format:
 Run:
 
 ```bash
-python3 moevm/phase0/cache_sim.py moevm/runs/router_trace.jsonl \
+python3 phase0/cache_sim.py runs/router_trace.jsonl \
   --slice-mb 1.90 --budgets 20,24,28 --bssd-gbps 5 --compute-ms 14 \
-  --json moevm/runs/cache_sim.json
+  --json runs/cache_sim.json
 ```
 
 ## Kill Switches
@@ -680,8 +680,8 @@ Added local options:
 
 CPU-only smoke:
 
-- Log: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.log`.
-- Trace: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.jsonl`.
+- Log: `runs/qwen3_next_q3_llama_moevm_cpu_smoke.log`.
+- Trace: `runs/qwen3_next_q3_llama_moevm_cpu_smoke.jsonl`.
 - Mode: `-ngl 0 --no-repack`.
 - Prompt tokens: 10.
 - Trace records: 940.
@@ -694,7 +694,7 @@ CPU-only smoke:
 
 Limited offload probe:
 
-- Log: `moevm/runs/qwen3_next_q3_llama_moevm_ngl4_smoke.log`.
+- Log: `runs/qwen3_next_q3_llama_moevm_ngl4_smoke.log`.
 - Mode: `-ngl 4`.
 - Result: stopped by `safe_run.py` before decode.
 - Stop reason: wired memory exceeded 34GiB.
@@ -709,7 +709,7 @@ Working offload path:
 
 Lab MoE decode smoke:
 
-- Log: `moevm/runs/mistral_2x_moe_llama_moevm_decode3_hook.log`.
+- Log: `runs/mistral_2x_moe_llama_moevm_decode3_hook.log`.
 - Mode: `GGML_OP_OFFLOAD_MIN_BATCH=1`, `-ngl 99`, expert tensors overridden to CPU, `--no-mmap`.
 - Generated 3 tokens at 1.37 tok/s.
 - Copy hook calls: 384.
@@ -721,9 +721,9 @@ Qwen3Next Q3 prompt + real decode:
 - Best stable command family:
 
 ```bash
-python3 moevm/phase0/safe_run.py \
-  --log moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.log \
-  --summary moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.summary \
+python3 phase0/safe_run.py \
+  --log runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.log \
+  --summary runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.summary \
   --max-rss-mib 44032 \
   --max-wired-gib 40.5 \
   --min-free-pct 5 \
@@ -731,7 +731,7 @@ python3 moevm/phase0/safe_run.py \
   -- env GGML_OP_OFFLOAD_MIN_BATCH=1 \
     external/llama.cpp/build/bin/llama-moe-trace \
       -m ~/models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf \
-      --trace-out moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.jsonl \
+      --trace-out runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.jsonl \
       --trace-candidates 10 \
       --moevm-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.idx \
       --moevm-component-index ~/models/qwen3-coder-next/qwen3-next-q3.moevm.cidx \
@@ -788,10 +788,10 @@ Current verdict:
 
 Parity check:
 
-- Tool: `moevm/phase0/compare_decode_logs.py`.
-- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode20_parity.log`.
-- MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode20_parity.log`.
-- Compare JSON: `moevm/runs/qwen3_next_q3_decode20_parity_compare.json`.
+- Tool: `phase0/compare_decode_logs.py`.
+- Baseline log: `runs/qwen3_next_q3_baseline_ot_cpu_decode20_parity.log`.
+- MoEVM log: `runs/qwen3_next_q3_moevm_decode20_parity.log`.
+- Compare JSON: `runs/qwen3_next_q3_decode20_parity_compare.json`.
 - Baseline mode: same `GGML_OP_OFFLOAD_MIN_BATCH=1`, `-ngl 99`, expert CPU override, no MoEVM sidecar.
 - Baseline generated 20 tokens at 6.45 tok/s.
 - MoEVM generated 20 tokens at 5.30 tok/s in the parity run.
@@ -817,9 +817,9 @@ Optimization probes after parity:
 
 Current best 100-token artifacts:
 
-- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode100_parity.log`.
-- Best MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_arena1_t12_i256.log`.
-- Compare JSON: `moevm/runs/qwen3_next_q3_decode100_memcpy_cache_arena1_t12_i256_compare.json`.
+- Baseline log: `runs/qwen3_next_q3_baseline_ot_cpu_decode100_parity.log`.
+- Best MoEVM log: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_arena1_t12_i256.log`.
+- Compare JSON: `runs/qwen3_next_q3_decode100_memcpy_cache_arena1_t12_i256_compare.json`.
 - Result: `same_tokens=true`.
 - Baseline: 100 tokens in 12.345s, 8.10 tok/s.
 - MoEVM: 100 tokens in 9.041s, 11.06 tok/s.
@@ -845,18 +845,18 @@ Validation results:
 
 | Mode | Log | Result | Notes |
 |---|---|---:|---|
-| Shadow IDs, graph reuse enabled | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids.log` | `same_tokens=true`, 8.86 tok/s | `shadow_ids_applied=14403`, `fallback=141`, `graph_patches=graph_patch_restores=14403`. |
-| Shadow IDs, `LLAMA_GRAPH_REUSE_DISABLE=1` | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids_no_reuse.log` | `same_tokens=true`, 8.59 tok/s | Confirms restore is not hiding a graph-reuse-only failure. |
-| Compact layer 0 | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_l0.log` | `same_tokens=true`, 8.91 tok/s | `compact_applied=300`, `fallback=3`; only layer 0 decode was compacted. |
-| Compact all decode layers | `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_all.log` | `same_tokens=true`, 8.66 tok/s | `compact_applied=14403`, `fallback=141`; all decode MoE matmuls used compact weights/remapped IDs. |
+| Shadow IDs, graph reuse enabled | `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids.log` | `same_tokens=true`, 8.86 tok/s | `shadow_ids_applied=14403`, `fallback=141`, `graph_patches=graph_patch_restores=14403`. |
+| Shadow IDs, `LLAMA_GRAPH_REUSE_DISABLE=1` | `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids_no_reuse.log` | `same_tokens=true`, 8.59 tok/s | Confirms restore is not hiding a graph-reuse-only failure. |
+| Compact layer 0 | `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_l0.log` | `same_tokens=true`, 8.91 tok/s | `compact_applied=300`, `fallback=3`; only layer 0 decode was compacted. |
+| Compact all decode layers | `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_all.log` | `same_tokens=true`, 8.66 tok/s | `compact_applied=14403`, `fallback=141`; all decode MoE matmuls used compact weights/remapped IDs. |
 
 Interpretation:
 
 - Compact/shadow graph surgery is now correct at token-parity level across 100 generated tokens.
 - The compact path is intentionally slower today because it still recopies every selected expert each token and adds ID remap/tensor patch overhead.
 - The value of compact is architectural: it creates the exact mechanism needed for a persistent compact expert pool where only cache misses are copied.
-- Logits-delta checker is implemented in `moevm/phase0/compare_logits.py`.
-- Compact all decode with logits: `moevm/runs/qwen3_next_q3_decode20_compact_all_logits_compare.json`, `max_abs=0.0`, `argmax_match_count=20`.
+- Logits-delta checker is implemented in `phase0/compare_logits.py`.
+- Compact all decode with logits: `runs/qwen3_next_q3_decode20_compact_all_logits_compare.json`, `max_abs=0.0`, `argmax_match_count=20`.
 
 ## Persistent Expert Pool Milestone
 
@@ -871,17 +871,17 @@ Validation results:
 
 | Mode | Log | Result | Notes |
 |---|---|---:|---|
-| Pool layer 0, cap64, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_l0_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 10.06 tok/s | First pool correctness checkpoint. |
-| Pool all, cap64, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 0.79 tok/s | Correct but too slow; Metal appears to pay for the larger `ne[2]=64` pool tensor. |
-| Pool all, cap10 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap10.log` | `same_tokens=true`, 11.65 tok/s | Best short sweep result. |
-| Pool all, cap11 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap11.log` | `same_tokens=true`, 11.17 tok/s | Fewer copies than cap10, but lower speed. |
-| Pool all, cap16 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap16.log` | `same_tokens=true`, 10.67 tok/s | Fewer copies but lower speed than cap10. |
-| Pool all, cap12 | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap12.log` | `same_tokens=true`, 10.49 tok/s | Still slower than cap10. |
-| Pool all, cap10, logits | `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap10_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 11.01 tok/s | Current bit-exact pool proof. |
-| Pool all, cap10, 100 tokens | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap10.log` | `same_tokens=true`, 11.95 tok/s | New best result. |
-| Pool all, cap10, 100 tokens repeat | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap10_r2.log` | `same_tokens=true`, 11.76 tok/s | Confirms the gain is repeatable. |
-| Pool all, cap11, 100 tokens | `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap11.log` | `same_tokens=true`, 11.81 tok/s | More hits than cap10, but slower overall. |
-| Pool all, cap10, 256 tokens | `moevm/runs/qwen3_next_q3_moevm_decode256_pool_all_cap10.log` | 11.74 tok/s | Stability run, `callback_fallback=0`, copied 107.05GB. |
+| Pool layer 0, cap64, logits | `runs/qwen3_next_q3_moevm_decode20_pool_l0_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 10.06 tok/s | First pool correctness checkpoint. |
+| Pool all, cap64, logits | `runs/qwen3_next_q3_moevm_decode20_pool_all_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 0.79 tok/s | Correct but too slow; Metal appears to pay for the larger `ne[2]=64` pool tensor. |
+| Pool all, cap10 | `runs/qwen3_next_q3_moevm_decode20_pool_all_cap10.log` | `same_tokens=true`, 11.65 tok/s | Best short sweep result. |
+| Pool all, cap11 | `runs/qwen3_next_q3_moevm_decode20_pool_all_cap11.log` | `same_tokens=true`, 11.17 tok/s | Fewer copies than cap10, but lower speed. |
+| Pool all, cap16 | `runs/qwen3_next_q3_moevm_decode20_pool_all_cap16.log` | `same_tokens=true`, 10.67 tok/s | Fewer copies but lower speed than cap10. |
+| Pool all, cap12 | `runs/qwen3_next_q3_moevm_decode20_pool_all_cap12.log` | `same_tokens=true`, 10.49 tok/s | Still slower than cap10. |
+| Pool all, cap10, logits | `runs/qwen3_next_q3_moevm_decode20_pool_all_cap10_logits.log` | `same_tokens=true`, logits `max_abs=0.0`, 11.01 tok/s | Current bit-exact pool proof. |
+| Pool all, cap10, 100 tokens | `runs/qwen3_next_q3_moevm_decode100_pool_all_cap10.log` | `same_tokens=true`, 11.95 tok/s | New best result. |
+| Pool all, cap10, 100 tokens repeat | `runs/qwen3_next_q3_moevm_decode100_pool_all_cap10_r2.log` | `same_tokens=true`, 11.76 tok/s | Confirms the gain is repeatable. |
+| Pool all, cap11, 100 tokens | `runs/qwen3_next_q3_moevm_decode100_pool_all_cap11.log` | `same_tokens=true`, 11.81 tok/s | More hits than cap10, but slower overall. |
+| Pool all, cap10, 256 tokens | `runs/qwen3_next_q3_moevm_decode256_pool_all_cap10.log` | 11.74 tok/s | Stability run, `callback_fallback=0`, copied 107.05GB. |
 
 Current best 100-token comparison:
 
@@ -903,7 +903,7 @@ Interpretation:
 Files:
 
 - GGUF: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/Qwen3-Coder-Next-Q4_K_M.gguf`, about 45GiB.
-- Sidecar plan: `moevm/runs/qwen3_next_q4_sidecar_plan.json`, 32MiB.
+- Sidecar plan: `runs/qwen3_next_q4_sidecar_plan.json`, 32MiB.
 - Packed sidecar: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm`, 43.69GiB.
 - Index: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.idx`, 384KiB.
 - Component index: `$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.cidx`, 576KiB.
@@ -946,21 +946,21 @@ Best current Q4 comparison:
 
 | Mode | Log | Decoded | tok/s | Notes |
 |---|---|---:|---:|---|
-| Baseline, same placement, no sidecar | `moevm/runs/qwen3_next_q4_baseline_decode100_ngl0_opoffload_b1.log` | 64 | 3.03 | EOG at 64/100. |
-| MoEVM pool cap10 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1.log` | 64 | 4.96 | `same_tokens=true`, `pool_fallback=0`. |
-| MoEVM pool cap64 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap64.log` | 64 | 5.10 | Lower copy volume, stable. |
-| MoEVM pool cap128 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap128.log` | 64 | 5.10 | Higher wired memory, no speed gain over cap64. |
-| MoEVM pool cap256 | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap256.log` | 64 | 5.12 | Best measured; zero pool evictions, copied 12.66GB. |
-| Baseline `-ngl99 --op-offload`, sparse mmap | `moevm/runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | 92 | 4.24 | Same placement baseline for current MoEVM. |
-| MoEVM `-ngl99`, pool cap32, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap32_kvfaauto.log` | 92 | 12.39 | Correct but below cap64. |
-| MoEVM `-ngl99`, pool cap64, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap64_kvfaauto.log` | 92 | 13.08 | Pre-P0.b best. |
-| MoEVM `-ngl99`, pool cap128, sparse mmap | `moevm/runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap128_kvfaauto.log` | 92 | 12.96 | Fewer copies, slightly slower and higher wired. |
-| MoEVM `-ngl99`, pool cap64, P0.b defer input wait prototype | `moevm/runs/qwen3_next_q4_p0b_notrace_cap64_n200.log` | 200 | 20.13 | Unguarded prototype; `same_tokens=true` vs pre-P0.b no-trace. |
-| MoEVM `-ngl99`, pool cap64, P0.b hardened defer input wait | `moevm/runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log` | 200 | 18.64 | Current mergeable best; epoch/pinning guard, `same_tokens=true`. |
+| Baseline, same placement, no sidecar | `runs/qwen3_next_q4_baseline_decode100_ngl0_opoffload_b1.log` | 64 | 3.03 | EOG at 64/100. |
+| MoEVM pool cap10 | `runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1.log` | 64 | 4.96 | `same_tokens=true`, `pool_fallback=0`. |
+| MoEVM pool cap64 | `runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap64.log` | 64 | 5.10 | Lower copy volume, stable. |
+| MoEVM pool cap128 | `runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap128.log` | 64 | 5.10 | Higher wired memory, no speed gain over cap64. |
+| MoEVM pool cap256 | `runs/qwen3_next_q4_moevm_decode100_ngl0_opoffload_b1_cap256.log` | 64 | 5.12 | Best measured; zero pool evictions, copied 12.66GB. |
+| Baseline `-ngl99 --op-offload`, sparse mmap | `runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | 92 | 4.24 | Same placement baseline for current MoEVM. |
+| MoEVM `-ngl99`, pool cap32, sparse mmap | `runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap32_kvfaauto.log` | 92 | 12.39 | Correct but below cap64. |
+| MoEVM `-ngl99`, pool cap64, sparse mmap | `runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap64_kvfaauto.log` | 92 | 13.08 | Pre-P0.b best. |
+| MoEVM `-ngl99`, pool cap128, sparse mmap | `runs/qwen3_next_q4_moevm_decode100_ngl99_sparse_mmap_cap128_kvfaauto.log` | 92 | 12.96 | Fewer copies, slightly slower and higher wired. |
+| MoEVM `-ngl99`, pool cap64, P0.b defer input wait prototype | `runs/qwen3_next_q4_p0b_notrace_cap64_n200.log` | 200 | 20.13 | Unguarded prototype; `same_tokens=true` vs pre-P0.b no-trace. |
+| MoEVM `-ngl99`, pool cap64, P0.b hardened defer input wait | `runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log` | 200 | 18.64 | Current mergeable best; epoch/pinning guard, `same_tokens=true`. |
 
 Cap256 comparison JSON:
 
-- `moevm/runs/qwen3_next_q4_decode100_ngl0_opoffload_b1_cap256_compare.json`
+- `runs/qwen3_next_q4_decode100_ngl0_opoffload_b1_cap256_compare.json`
 - `same_tokens=true`.
 - Baseline: 64 tokens in 21.094s, 3.03 tok/s.
 - MoEVM: 64 tokens in 12.511s, 5.12 tok/s.
@@ -972,7 +972,7 @@ Cap256 comparison JSON:
 
 Current best sparse mmap comparison JSON:
 
-- `moevm/runs/qwen3_next_q4_decode100_ngl99_sparse_mmap_cap64_kvfaauto_compare.json`
+- `runs/qwen3_next_q4_decode100_ngl99_sparse_mmap_cap64_kvfaauto_compare.json`
 - `same_tokens=true`.
 - Baseline same placement: 92 tokens in 21.712s, 4.24 tok/s.
 - MoEVM: 92 tokens in 7.033s, 13.08 tok/s.
@@ -985,9 +985,9 @@ Current best sparse mmap comparison JSON:
 
 P0.b deferred input wait:
 
-- Pre-P0.b site timing: `moevm/runs/qwen3_next_q4_site_timing_notrace_cap64_n200.log`, 200 tokens in 15.465s, 12.93 tok/s.
-- P0.b prototype run: `moevm/runs/qwen3_next_q4_p0b_notrace_cap64_n200.log`, 200 tokens in 9.934s, 20.13 tok/s.
-- P0.b hardened run: `moevm/runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log`, 200 tokens in 10.729s, 18.64 tok/s.
+- Pre-P0.b site timing: `runs/qwen3_next_q4_site_timing_notrace_cap64_n200.log`, 200 tokens in 15.465s, 12.93 tok/s.
+- P0.b prototype run: `runs/qwen3_next_q4_p0b_notrace_cap64_n200.log`, 200 tokens in 9.934s, 20.13 tok/s.
+- P0.b hardened run: `runs/qwen3_next_q4_hardened_defer_on_cap64_n200.log`, 200 tokens in 10.729s, 18.64 tok/s.
 - Token parity: `same_tokens=true` over all 200 generated IDs.
 - Hardened token parity: `same_tokens=true` vs both the prototype and fallback 200-token runs.
 - `split_input_wait_us`: 9,211,215 -> 698 prototype, 623 hardened.
@@ -996,9 +996,9 @@ P0.b deferred input wait:
 - Mechanism: MoEVM sets `defer_input_wait=1` for pool/compact mode. The backend delays the split input wait until a real fallback write to `input_cpy` is required; pool-patched `MUL_MAT_ID` inputs skip that drain entirely.
 - Guardrail: in deferred mode, the MoEVM callback returns `false` instead of doing a classic copy if pool/compact cannot patch the graph, so the backend falls back after performing the normal wait.
 - Hardening: defer is refused when scheduler events are active, pool slot eviction is guarded by explicit submit/completed epochs, and pool/compact shadow IDs are copied into graph-visible tensors only after all required fills succeed.
-- Stress probe: `moevm/runs/qwen3_next_q4_hardened_defer_on_cap16_n100.log`, pool cap16, 100 tokens in 6.187s, 16.16 tok/s, same first 100 IDs as cap64 reference, `pool_evictions=32637`, `pool_forced_fences=0`.
+- Stress probe: `runs/qwen3_next_q4_hardened_defer_on_cap16_n100.log`, pool cap16, 100 tokens in 6.187s, 16.16 tok/s, same first 100 IDs as cap64 reference, `pool_evictions=32637`, `pool_forced_fences=0`.
 - Deterministic pinning self-test: `external/llama.cpp/build/bin/llama-moe-trace --moevm-self-test-pool-pinning`, passed. It verifies that pinned slots are skipped during eviction and that advancing `completed_epoch` makes the retry plan succeed.
-- Delay/fence stress: `moevm/runs/qwen3_next_q4_delay_pinning_cap16_n50.log`, cap16, `--moevm-inject-delay-us 500`, one-shot `--moevm-test-force-pinned-fence`, 50 tokens in 21.059s, same first 50 IDs as hardened cap64 reference, `pool_forced_fences=1`, `pool_pinned_eviction_skips=16`, callback `delay_us=14818365`, runtime `delay_us=7421004`. This is a correctness stress, not a throughput number.
+- Delay/fence stress: `runs/qwen3_next_q4_delay_pinning_cap16_n50.log`, cap16, `--moevm-inject-delay-us 500`, one-shot `--moevm-test-force-pinned-fence`, 50 tokens in 21.059s, same first 50 IDs as hardened cap64 reference, `pool_forced_fences=1`, `pool_pinned_eviction_skips=16`, callback `delay_us=14818365`, runtime `delay_us=7421004`. This is a correctness stress, not a throughput number.
 
 P0.c dynamic-K pool:
 
@@ -1006,11 +1006,11 @@ P0.c dynamic-K pool:
 - The IDs readback path now reads the full strided tensor span, and pool/compact remap walks both dimensions of the original `[k, n_tokens]` IDs tensor with source/destination strides.
 - Added pool fallback reason counters: shape, IDs read, allocation, shadow allocation/bytes, plan, remap, and fill.
 - Added deterministic stride-aware remap coverage to `--moevm-self-test-pool-pinning`.
-- `ub=1` gate: `moevm/runs/qwen3_next_q4_dynamick_ub1_cap64_n100.log`, 100 tokens in 5.178s, 19.31 tok/s, same first 100 IDs as the hardened reference, `fallback_k_overflow=0`, `pool_fallback=0`.
-- `ub=8` prefill gate: `moevm/runs/qwen3_next_q4_dynamick_long_ub8_cap128_n4_shadowfix.log`, 960-token prompt, 4 decode tokens in 0.206s, 19.38 tok/s, generated IDs `[31075,264,5670,11972]`, `fallback_k_overflow=0`, `pool_fallback=0`.
+- `ub=1` gate: `runs/qwen3_next_q4_dynamick_ub1_cap64_n100.log`, 100 tokens in 5.178s, 19.31 tok/s, same first 100 IDs as the hardened reference, `fallback_k_overflow=0`, `pool_fallback=0`.
+- `ub=8` prefill gate: `runs/qwen3_next_q4_dynamick_long_ub8_cap128_n4_shadowfix.log`, 960-token prompt, 4 decode tokens in 0.206s, 19.38 tok/s, generated IDs `[31075,264,5670,11972]`, `fallback_k_overflow=0`, `pool_fallback=0`.
 - Bit-exact replacement check: `qwen3_next_q4_dynamick_long_ub8_cap128_n4.logits` vs `qwen3_next_q4_dynamick_long_ub8_cap128_n4_shadowfix.logits` has `max_abs=0.0`, `argmax_mismatch_count=0`.
 - Note: `ub=1` vs `ub=8` logits differ numerically (`max_abs=1.711`) while tokens/argmax match; the same delta exists on the old `ub=8` fallback, so it is not caused by dynamic-K remap.
-- Delay/fence `ub=8` stress: `moevm/runs/qwen3_next_q4_dynamick_long_ub8_delay_cap128_n2_rss65g.log`, 960-token prompt, delay max 500us, one-shot forced fence, same first two generated IDs `[31075,264]`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=89`, `fallback_k_overflow=0`, `pool_fallback=0`. Throughput is not meaningful because 65.48s of artificial delay was injected.
+- Delay/fence `ub=8` stress: `runs/qwen3_next_q4_dynamick_long_ub8_delay_cap128_n2_rss65g.log`, 960-token prompt, delay max 500us, one-shot forced fence, same first two generated IDs `[31075,264]`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=89`, `fallback_k_overflow=0`, `pool_fallback=0`. Throughput is not meaningful because 65.48s of artificial delay was injected.
 
 P0.d Fable audit hardening:
 
@@ -1032,19 +1032,19 @@ P0.d Fable audit hardening:
 - `safe_run.py` now reads child output via nonblocking `os.read()` and fails closed after repeated `memory_pressure` failures.
 - Sidecar pack summaries include SHA-256. `sidecar_index.py` and `sidecar_component_index.py` can bind indexes to a `.moevm` payload by size + SHA-256 prefix; the runtime verifies these fields when present.
 - Q4 `.idx` and `.cidx` were regenerated with integrity fields:
-  - `moevm/runs/qwen3_next_q4_sidecar_index_integrity.log`, sidecar size `46909087744`, sha256 prefix24 `afbf1ec420fa72a8a5f4852d49fa4233c0d76875213ee123`.
-  - `moevm/runs/qwen3_next_q4_sidecar_component_index_integrity.log`, sha256 prefix16 `afbf1ec420fa72a8a5f4852d49fa4233`.
-- Smoke with integrity verification: `moevm/runs/qwen3_next_q4_audit_integrity_smoke_n1.log`, 1 token at 17.08 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `defer_input_wait_disabled_events=0`.
-- Second-pass smoke after atomic stats/runtime error cleanup: `moevm/runs/qwen3_next_q4_auditfix2_smoke_n1.log`, 1 token at 17.28 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
-- Third-pass smoke after Fable nits: `moevm/runs/qwen3_next_q4_auditfix3_smoke_n1.log`, 1 token at 15.63 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
-- Real-context run: `moevm/runs/qwen3_next_q4_p0d_c4096_ub8_cap128_n50.log`, `-c 4096`, 960-token prompt, 50 decode tokens in 2.285s, 21.88 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+  - `runs/qwen3_next_q4_sidecar_index_integrity.log`, sidecar size `46909087744`, sha256 prefix24 `afbf1ec420fa72a8a5f4852d49fa4233c0d76875213ee123`.
+  - `runs/qwen3_next_q4_sidecar_component_index_integrity.log`, sha256 prefix16 `afbf1ec420fa72a8a5f4852d49fa4233`.
+- Smoke with integrity verification: `runs/qwen3_next_q4_audit_integrity_smoke_n1.log`, 1 token at 17.08 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `defer_input_wait_disabled_events=0`.
+- Second-pass smoke after atomic stats/runtime error cleanup: `runs/qwen3_next_q4_auditfix2_smoke_n1.log`, 1 token at 17.28 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+- Third-pass smoke after Fable nits: `runs/qwen3_next_q4_auditfix3_smoke_n1.log`, 1 token at 15.63 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
+- Real-context run: `runs/qwen3_next_q4_p0d_c4096_ub8_cap128_n50.log`, `-c 4096`, 960-token prompt, 50 decode tokens in 2.285s, 21.88 tok/s, `pool_fallback=0`, `fallback_k_overflow=0`, `runtime_errors=0`.
 - Long no-trace logits parity: stock `qwen3_next_q4_p0d_parity_stock_ignoreeos_n1024_v2.log` vs MoEVM `qwen3_next_q4_p0d_parity_moevm_cap128_ignoreeos_n1024.log`, 1024 rows, `max_abs=0.0`, `argmax_mismatch_count=0`, `token_mismatch_count=0`.
 - Jitter/fence logits stress: `qwen3_next_q4_p0d_jitter_delay_cap16_n50.log`, cap16, `--moevm-inject-delay-us 500`, `--moevm-test-force-pinned-fence`, 50 rows, `max_abs=0.0` vs no-delay cap16 reference, `pool_forced_fences=1`, `pool_pinned_eviction_skips=16`, `runtime_errors=0`.
-- `safe_run` nonblocking smoke: `moevm/runs/safe_run_audit_echo.summary`, process exited cleanly after emitting partial stdout without a newline.
+- `safe_run` nonblocking smoke: `runs/safe_run_audit_echo.summary`, process exited cleanly after emitting partial stdout without a newline.
 
 Fast hybrid non-MoEVM baseline:
 
-- `moevm/runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log`
+- `runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log`
 - Mode: `-ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --no-op-offload`.
 - Result: 100 tokens in 9.174s, 10.90 tok/s.
 - This does not exercise MoEVM, but it is an important baseline unlocked by sparse mmap.
@@ -1066,7 +1066,7 @@ DeepSpec / DFlash R&D note:
 
 Speculative rollback probe:
 
-- Log: `moevm/runs/qwen3_next_q4_spec_probe_qwen06b_q8_n32.log`.
+- Log: `runs/qwen3_next_q4_spec_probe_qwen06b_q8_n32.log`.
 - Target: local `Qwen3-Coder-Next-Q4_K_M.gguf`, `-ngl 99`, routed experts on CPU, `--no-op-offload`.
 - Draft: `Qwen/Qwen3-0.6B-GGUF:Q8_0`, downloaded through llama.cpp HF cache.
 - Result: process exited successfully.
@@ -1080,8 +1080,8 @@ MoEVM speculative probe:
 - DFlash fix: draft contexts now receive `ctx_other=ctx_tgt`, and the loop calls `common_speculative_process()` after each target decode so DFlash can inject target hidden states into the draft KV cache.
 - Empty-draft guard: if a high `p_min` causes no draft tokens to be produced, the loop no longer calls `common_speculative_accept()` with a null last implementation.
 - Same-prompt non-spec baseline:
-  - `moevm/runs/qwen3_next_q4_moevm_normal_sameprompt_n32.log`, 32 tokens in 2.095s, 15.28 tok/s.
-  - `moevm/runs/qwen3_next_q4_moevm_normal_sameprompt_n100.log`, 100 tokens in 5.764s, 17.35 tok/s.
+  - `runs/qwen3_next_q4_moevm_normal_sameprompt_n32.log`, 32 tokens in 2.095s, 15.28 tok/s.
+  - `runs/qwen3_next_q4_moevm_normal_sameprompt_n100.log`, 100 tokens in 5.764s, 17.35 tok/s.
 - Qwen3-0.6B Q8 draft-simple matrix on the same prompt:
   - `draft1`: `qwen3_next_q4_moevm_spec_qwen06b_q8_draft1_n32.log`, 34 tokens in 2.537s, 13.40 tok/s, accept 100%.
   - `draft2`: `qwen3_next_q4_moevm_spec_qwen06b_q8_draft2_n32.log`, 33 tokens in 2.803s, 11.77 tok/s, accept 76.92%.
@@ -1105,7 +1105,7 @@ Rejected experiment:
 
 - Dense resident cache using llama.cpp's original `input_cpy` tensor was tested as `--moevm-resident-cache-unsafe`.
 - It was fast on 20 tokens, 13.65 tok/s, and reduced copied bytes to 3.75GB, but it failed token parity: generated IDs became `[198,0,0,...]`.
-- Token compare: `moevm/runs/qwen3_next_q3_decode20_resident_cache_keyed_token_compare.json`, `same_tokens=false`.
+- Token compare: `runs/qwen3_next_q3_decode20_resident_cache_keyed_token_compare.json`, `same_tokens=false`.
 - Interpretation: the scheduler copy buffer cannot be treated as durable resident expert storage across splits. The safe production path remains graph-restored compact/pool tensors.
 
 ## Full-Resident Speed Check
@@ -1114,7 +1114,7 @@ Question: if Qwen3Next Q3 fits on the Mac, why is MoEVM only at 11-12 tok/s?
 
 Result: full-resident llama.cpp/Metal is much faster than the MoEVM paging path.
 
-- Command log: `moevm/runs/qwen3_next_q3_fullresident_llamabench_decode128.log`
+- Command log: `runs/qwen3_next_q3_fullresident_llamabench_decode128.log`
 - Model reported by `llama-bench`: `qwen3next 80B.A3B Q3_K - Medium`.
 - Model size: 36,276,696,064 bytes.
 - Params: 79,674,391,296.
@@ -1135,9 +1135,9 @@ Interpretation:
 
 Local harness:
 
-- Script: `moevm/phase0/code_bench.py`
-- Summary: `moevm/runs/codebench_smoke/summary.md`
-- JSON: `moevm/runs/codebench_smoke/summary.json`
+- Script: `phase0/code_bench.py`
+- Summary: `runs/codebench_smoke/summary.md`
+- JSON: `runs/codebench_smoke/summary.json`
 
 Smoke result over three small Python tasks:
 
@@ -1160,21 +1160,21 @@ Implementation checkpoint:
 
 Validation:
 
-- Smoke: `moevm/runs/qwen3_next_q4_graph_sched_smoke_n1.log`, token matches reference, `copy_hook_calls=0`, `graph_patch_applied=864`, `graph_topk_fills=519`, `runtime_errors=0`.
-- Throughput: `moevm/runs/qwen3_next_q4_graph_sched_c192_n50.log`, 50 tokens in 2.284s, 21.90 tok/s, `copy_hook_calls=0`, `callback_handled=8640`, `graph_fill_fallback=0`, `runtime_errors=0`.
-- Logits parity: `moevm/runs/qwen3_next_q4_graph_parity_off_vs_sched_n50.json`, 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
-- Jitter/fence stress: `moevm/runs/qwen3_next_q4_graph_sched_jitter_delay_cap16_n20.log`, cap16, `--moevm-inject-delay-us 500`, `--moevm-test-force-pinned-fence`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=15`, `runtime_errors=0`.
-- Jitter logits parity: `moevm/runs/qwen3_next_q4_graph_sched_jitter_cap16_n20_compare.json`, `max_abs=0.0`.
-- Phase A timestamp diagnostic: use `MOEVM_METAL_TIMESTAMPS=1` only for diagnostics, not headline throughput. `moevm/runs/qwen3_next_q4_graph_sched_timestamps_oldprompt_c192_n50.log` reports `metal_cmd_buffers=8799`, `metal_gpu_busy_us=1304967`, and zero missing timestamps over a 2.472s decode, so GPU busy is about 52.8%. The same run reports `ids_readback_us=1564882`, `backend_sync_us=1671520`, and `callback_us=1587336`.
-- Timestamp control: `moevm/runs/qwen3_next_q4_graph_sched_no_timestamps_oldprompt2_c192_n50.log`, same tokens, 50 decode tokens in 2.427s, 20.60 tok/s, `metal_cmd_buffers=0`.
+- Smoke: `runs/qwen3_next_q4_graph_sched_smoke_n1.log`, token matches reference, `copy_hook_calls=0`, `graph_patch_applied=864`, `graph_topk_fills=519`, `runtime_errors=0`.
+- Throughput: `runs/qwen3_next_q4_graph_sched_c192_n50.log`, 50 tokens in 2.284s, 21.90 tok/s, `copy_hook_calls=0`, `callback_handled=8640`, `graph_fill_fallback=0`, `runtime_errors=0`.
+- Logits parity: `runs/qwen3_next_q4_graph_parity_off_vs_sched_n50.json`, 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
+- Jitter/fence stress: `runs/qwen3_next_q4_graph_sched_jitter_delay_cap16_n20.log`, cap16, `--moevm-inject-delay-us 500`, `--moevm-test-force-pinned-fence`, `pool_forced_fences=1`, `pool_pinned_eviction_skips=15`, `runtime_errors=0`.
+- Jitter logits parity: `runs/qwen3_next_q4_graph_sched_jitter_cap16_n20_compare.json`, `max_abs=0.0`.
+- Phase A timestamp diagnostic: use `MOEVM_METAL_TIMESTAMPS=1` only for diagnostics, not headline throughput. `runs/qwen3_next_q4_graph_sched_timestamps_oldprompt_c192_n50.log` reports `metal_cmd_buffers=8799`, `metal_gpu_busy_us=1304967`, and zero missing timestamps over a 2.472s decode, so GPU busy is about 52.8%. The same run reports `ids_readback_us=1564882`, `backend_sync_us=1671520`, and `callback_us=1587336`.
+- Timestamp control: `runs/qwen3_next_q4_graph_sched_no_timestamps_oldprompt2_c192_n50.log`, same tokens, 50 decode tokens in 2.427s, 20.60 tok/s, `metal_cmd_buffers=0`.
 - Graph-mode prefetch fix: graph-build initially lost the legacy `prefetch_candidates()` call. It now reuses the same cached prefetch helper in graph-mode after deduplicating topk ids. This changes DFlash graph-mode from `copy_prefetches=0` / 18.17 tok/s to `copy_prefetches=2063` / 18.85 tok/s on the same DFlash run.
-- Phase A DFlash rerun: best current graph-build DFlash is `moevm/runs/qwen3_next_q4_graph_dflash_prefetch_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.359s, 18.85 tok/s, accept 81.71%, `graph_fill_fallback=0`. Same-prompt graph normal is `moevm/runs/qwen3_next_q4_graph_normal_sameprompt_cap128_n100.log`, 100 tokens in 5.368s, 18.63 tok/s. Legacy-path DFlash rerun is 19.58 tok/s.
+- Phase A DFlash rerun: best current graph-build DFlash is `runs/qwen3_next_q4_graph_dflash_prefetch_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.359s, 18.85 tok/s, accept 81.71%, `graph_fill_fallback=0`. Same-prompt graph normal is `runs/qwen3_next_q4_graph_normal_sameprompt_cap128_n100.log`, 100 tokens in 5.368s, 18.63 tok/s. Legacy-path DFlash rerun is 19.58 tok/s.
 - Negative DFlash A/Bs: `draft16 p_min=0.5` is 15.89 tok/s because it creates more topk fills/readbacks; `draft8 p_min=0.7` is 18.48 tok/s because it drafts less even though accepted draft tokens are cleaner.
 - Fused graph-pool callbacks: the scheduler now calls the graph-pool callback once per topk ids tensor and reuses the returned shadow ids for the other component nodes in the same split. This reduces graph callback attempts from three per layer to one per layer.
 - Expert-major graph fill: graph-mode fills all component pool tensors for one expert while holding a single pinned sidecar record, instead of pinning the same expert once per component.
-- Validation: `moevm/runs/qwen3_next_q4_graph_expertmajor_parity_compare_n50.json` vs the previous graph-build logits has 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
-- Result: `moevm/runs/qwen3_next_q4_graph_expertmajor_normal_cap128_n100.log`, 100 tokens in 5.061s, 19.76 tok/s. `moevm/runs/qwen3_next_q4_graph_expertmajor_dflash_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.039s, 20.04 tok/s, accept 81.71%.
-- Negative capacity check: `moevm/runs/qwen3_next_q4_graph_expertmajor_cap256_sameprompt_c192_n50.log`, 50 tokens in 2.539s, 19.69 tok/s. Cap256 removed pool evictions but was slower than cap128; keep cap128 as the default.
+- Validation: `runs/qwen3_next_q4_graph_expertmajor_parity_compare_n50.json` vs the previous graph-build logits has 50 rows, `max_abs=0.0`, zero token/argmax mismatches.
+- Result: `runs/qwen3_next_q4_graph_expertmajor_normal_cap128_n100.log`, 100 tokens in 5.061s, 19.76 tok/s. `runs/qwen3_next_q4_graph_expertmajor_dflash_cap128_draft8_pmin05_n100.log`, 101 tokens in 5.039s, 20.04 tok/s, accept 81.71%.
+- Negative capacity check: `runs/qwen3_next_q4_graph_expertmajor_cap256_sameprompt_c192_n50.log`, 50 tokens in 2.539s, 19.69 tok/s. Cap256 removed pool evictions but was slower than cap128; keep cap128 as the default.
 
 Interpretation:
 
@@ -1215,7 +1215,7 @@ Tooling fixes needed for gpt-oss:
 
 Sidecar:
 
-- Plan: `moevm/runs/gpt_oss_120b_q4_sidecar_plan.json`.
+- Plan: `runs/gpt_oss_120b_q4_sidecar_plan.json`.
 - Packed sidecar: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm`.
 - Index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx`.
 - Component index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx`.
@@ -1226,7 +1226,7 @@ Sidecar:
 
 Trace:
 
-- Trace: `moevm/runs/gpt_oss_120b_q4_cpu_trace_code_n128.jsonl`.
+- Trace: `runs/gpt_oss_120b_q4_cpu_trace_code_n128.jsonl`.
 - Prompt tokens: 67.
 - Generated tokens: 128.
 - Total trace tokens: 195.

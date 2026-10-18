@@ -1,6 +1,6 @@
 # GPT-OSS 120B Median-of-5 Launch Benchmark
 
-- Run dir: `moevm/runs/gpt_oss_120b_median5_observability_24g_20260705/`
+- Run dir: `runs/gpt_oss_120b_median5_observability_24g_20260705/`
 - Date: 2026-07-05
 - Model: `gpt-oss-120b Q4_K_M`
 - Prompt: `prompt_observability_512plus.txt`

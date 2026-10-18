@@ -31,7 +31,7 @@ The validated path is:
 
 ## Sidecar
 
-- Plan: `moevm/runs/gpt_oss_120b_q4_sidecar_plan.json`
+- Plan: `runs/gpt_oss_120b_q4_sidecar_plan.json`
 - Packed sidecar: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm`
 - Index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx`
 - Component index: `$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx`
@@ -44,7 +44,7 @@ Multi-shard fix: `TensorInfo.source_path` is now tracked by `gguf_inspect.py`, a
 
 ## Trace
 
-Trace: `moevm/runs/gpt_oss_120b_q4_cpu_trace_code_n128.jsonl`
+Trace: `runs/gpt_oss_120b_q4_cpu_trace_code_n128.jsonl`
 
 - Prompt tokens: 67
 - Generated tokens: 128
@@ -241,7 +241,7 @@ Real-context prompt, `c=4096`, 990 prompt tokens from `prompt_observability_512p
 
 Median-of-5 launch rerun, same real-context prompt and same `24 GiB`, `b=1 ub=1`, `n=128` shape:
 
-- Summary: `moevm/runs/gpt_oss_120b_median5_observability_24g_20260705.md`.
+- Summary: `runs/gpt_oss_120b_median5_observability_24g_20260705.md`.
 - Decode tok/s runs: 8.72, 10.64, 10.17, 7.65, 7.87.
 - Median decode throughput: 8.72 tok/s; range 7.65-10.64 tok/s.
 - Median wall time: 88.59 s; median decode time: 14.67 s.
@@ -254,7 +254,7 @@ Parallel multi-agent decode, same real-context prompt, `c=4096`, `n=32` per sequ
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | MoEVM parallel | 24 GiB | `b=4 ub=4` | 4 | 128 | 26.81 | 6.70 | 0 | 0 |
 
-Summary: `moevm/runs/gpt_oss_120b_parallel4_aggregate_20260705.md`.
+Summary: `runs/gpt_oss_120b_parallel4_aggregate_20260705.md`.
 This reaches the 20-25+ tok/s band as aggregate throughput for multi-agent serving. It is not a single-stream latency number.
 
 Interpretation:

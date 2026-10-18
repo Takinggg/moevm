@@ -10,11 +10,11 @@ the checks below. Do not relax these after seeing the result.
 Default launch soak:
 
 ```bash
-python3 moevm/phase0/gptoss_soak.py \
+python3 phase0/gptoss_soak.py \
   --hours 6 \
   --tokens 64 \
   --logits-every 20 \
-  --out-dir moevm/runs/gpt_oss_120b_launch_soak_final
+  --out-dir runs/gpt_oss_120b_launch_soak_final
 ```
 
 The first 6h attempt on 2026-07-05 was intentionally stopped after 44 clean
@@ -26,10 +26,10 @@ must run only after the launch code path is frozen.
 Run:
 
 ```bash
-python3 moevm/phase0/validate_soak.py \
-  moevm/runs/gpt_oss_120b_launch_soak_final \
+python3 phase0/validate_soak.py \
+  runs/gpt_oss_120b_launch_soak_final \
   --final \
-  --json moevm/runs/gpt_oss_120b_launch_soak_final/validation.json
+  --json runs/gpt_oss_120b_launch_soak_final/validation.json
 ```
 
 The result must be `status: pass`.
@@ -62,8 +62,8 @@ launch blocker.
 After the validator passes, inspect:
 
 ```bash
-cat moevm/runs/gpt_oss_120b_launch_soak_final/summary.json
-tail -n 20 moevm/runs/gpt_oss_120b_launch_soak_final/results.jsonl
+cat runs/gpt_oss_120b_launch_soak_final/summary.json
+tail -n 20 runs/gpt_oss_120b_launch_soak_final/results.jsonl
 ```
 
 The manual review is not a chance to waive failures. It is only to understand

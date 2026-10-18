@@ -7,8 +7,8 @@ This note captures the current integration target for Qwen3-Coder-Next Q3 on the
 - Packed sidecar: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm`
 - Main index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.idx`
 - Component index: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.cidx`
-- Runtime API: `moevm/phase0/moevm_runtime.hpp`
-- Runtime implementation: `moevm/phase0/moevm_runtime.cpp`
+- Runtime API: `phase0/moevm_runtime.hpp`
+- Runtime implementation: `phase0/moevm_runtime.cpp`
 - llama.cpp hook patch:
   - `external/llama.cpp/ggml/include/ggml-backend.h`
   - `external/llama.cpp/ggml/src/ggml-backend.cpp`
@@ -113,8 +113,8 @@ The hook also prefetches the selected expert set it receives from llama.cpp befo
 
 CPU-only Qwen3Next Q3 MoEVM smoke:
 
-- Command log: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.log`
-- Trace: `moevm/runs/qwen3_next_q3_llama_moevm_cpu_smoke.jsonl`
+- Command log: `runs/qwen3_next_q3_llama_moevm_cpu_smoke.log`
+- Trace: `runs/qwen3_next_q3_llama_moevm_cpu_smoke.jsonl`
 - Mode: `-ngl 0 --no-repack`, 1GiB MoEVM arena, 64MiB in-flight, 4 prefetch threads.
 - Prompt tokens: 10.
 - Trace records: 940.
@@ -127,7 +127,7 @@ CPU-only Qwen3Next Q3 MoEVM smoke:
 
 Limited Metal/offload probe:
 
-- Command log: `moevm/runs/qwen3_next_q3_llama_moevm_ngl4_smoke.log`
+- Command log: `runs/qwen3_next_q3_llama_moevm_ngl4_smoke.log`
 - Mode: `-ngl 4`, 1GiB MoEVM arena.
 - Result: stopped by `safe_run.py` before decode.
 - Stop reason: wired memory exceeded 34GiB.
@@ -135,8 +135,8 @@ Limited Metal/offload probe:
 
 Working Qwen3Next Q3 Metal/offload path:
 
-- Command log: `moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.log`
-- Trace: `moevm/runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.jsonl`
+- Command log: `runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.log`
+- Trace: `runs/qwen3_next_q3_llama_moevm_ngl99_hookprefetch_decode20_arena1_t8.jsonl`
 - Required env: `GGML_OP_OFFLOAD_MIN_BATCH=1`
 - Required placement: `-ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --op-offload --no-repack`
 - MoEVM runtime: 1GiB arena, 128MiB in-flight, 8 workers, prefetch top10.
@@ -170,10 +170,10 @@ Conclusion: the llama.cpp MoEVM path is now end-to-end working for Qwen3Next Q3.
 Parity check:
 
 - Added generated token ID logging in `llama-moe-trace`.
-- Added `moevm/phase0/compare_decode_logs.py`.
-- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode20_parity.log`.
-- MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode20_parity.log`.
-- Compare JSON: `moevm/runs/qwen3_next_q3_decode20_parity_compare.json`.
+- Added `phase0/compare_decode_logs.py`.
+- Baseline log: `runs/qwen3_next_q3_baseline_ot_cpu_decode20_parity.log`.
+- MoEVM log: `runs/qwen3_next_q3_moevm_decode20_parity.log`.
+- Compare JSON: `runs/qwen3_next_q3_decode20_parity_compare.json`.
 - Result: `same_tokens=true`.
 - Baseline: 20 generated tokens at 6.45 tok/s.
 - MoEVM: 20 generated tokens at 5.30 tok/s in the parity run.
@@ -197,9 +197,9 @@ Additional optimization probes:
 
 Best 100-token result:
 
-- Baseline log: `moevm/runs/qwen3_next_q3_baseline_ot_cpu_decode100_parity.log`
-- MoEVM log: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_arena1_t12_i256.log`
-- Compare JSON: `moevm/runs/qwen3_next_q3_decode100_memcpy_cache_arena1_t12_i256_compare.json`
+- Baseline log: `runs/qwen3_next_q3_baseline_ot_cpu_decode100_parity.log`
+- MoEVM log: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_arena1_t12_i256.log`
+- Compare JSON: `runs/qwen3_next_q3_decode100_memcpy_cache_arena1_t12_i256_compare.json`
 - Baseline: 100 tokens in 12.345s, 8.10 tok/s.
 - MoEVM: 100 tokens in 9.041s, 11.06 tok/s.
 - Result: `same_tokens=true`.
@@ -225,10 +225,10 @@ Validated checkpoints:
 
 Key logs:
 
-- Shadow IDs: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids.log`
-- Shadow IDs no graph reuse: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids_no_reuse.log`
-- Compact layer 0: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_l0.log`
-- Compact all decode layers: `moevm/runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_all.log`
+- Shadow IDs: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids.log`
+- Shadow IDs no graph reuse: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_shadow_ids_no_reuse.log`
+- Compact layer 0: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_l0.log`
+- Compact all decode layers: `runs/qwen3_next_q3_moevm_decode100_memcpy_cache_compact_all.log`
 
 Compact is not the preferred performance path. It still copies the same expert bytes and adds remap/swap overhead. Its purpose was to establish the correct graph mechanism for the persistent expert pool, where only missing compact slots are copied.
 
@@ -260,10 +260,10 @@ Current best 100-token result:
 
 Key logs:
 
-- Pool layer 0 logits: `moevm/runs/qwen3_next_q3_moevm_decode20_pool_l0_logits.log`
-- Pool all cap64 logits: `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_logits.log`
-- Pool all cap10 logits: `moevm/runs/qwen3_next_q3_moevm_decode20_pool_all_cap10_logits.log`
-- Pool all cap10 100-token: `moevm/runs/qwen3_next_q3_moevm_decode100_pool_all_cap10.log`
+- Pool layer 0 logits: `runs/qwen3_next_q3_moevm_decode20_pool_l0_logits.log`
+- Pool all cap64 logits: `runs/qwen3_next_q3_moevm_decode20_pool_all_logits.log`
+- Pool all cap10 logits: `runs/qwen3_next_q3_moevm_decode20_pool_all_cap10_logits.log`
+- Pool all cap10 100-token: `runs/qwen3_next_q3_moevm_decode100_pool_all_cap10.log`
 
 Engineering note: pool capacity is performance-critical. On Qwen3Next Q3, active experts per token are 10, and `--moevm-pool-capacity 10` is the current best setting. Larger capacities reduce copied bytes but can cost more in Metal compute than they save in copy time.
 
@@ -273,7 +273,7 @@ Rejected experiment: a dense resident cache using llama.cpp's original `input_cp
 
 Qwen3Next Q3 does fit full-resident on this Mac in the standard llama.cpp/Metal path:
 
-- Log: `moevm/runs/qwen3_next_q3_fullresident_llamabench_decode128.log`
+- Log: `runs/qwen3_next_q3_fullresident_llamabench_decode128.log`
 - `llama-bench` model type: `qwen3next 80B.A3B Q3_K - Medium`.
 - Params: 79,674,391,296.
 - Model size: 36,276,696,064 bytes.
@@ -285,11 +285,11 @@ This reframes the 11-12 tok/s MoEVM pool result. It is a win over the same CPU-e
 
 ## Code Benchmark Harness
 
-`llama-moe-trace` supports `--generated-out <path>`. `moevm/phase0/code_bench.py` uses it to run small Python code-generation tasks and local unit tests.
+`llama-moe-trace` supports `--generated-out <path>`. `phase0/code_bench.py` uses it to run small Python code-generation tasks and local unit tests.
 
 Smoke result:
 
-- Summary: `moevm/runs/codebench_smoke/summary.md`
+- Summary: `runs/codebench_smoke/summary.md`
 - Baseline CPU-expert placement: 2/3 passed, 7.95 tok/s average.
 - MoEVM pool cap10: 2/3 passed, 10.85 tok/s average.
 - Pool output matched baseline exactly on tokens and text for all tasks.

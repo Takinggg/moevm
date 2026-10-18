@@ -34,10 +34,10 @@ MoEVM modules are capability-gated, not model-name-gated. Before building a
 sidecar or publishing a benchmark for a new LLM, run:
 
 ```bash
-python3 moevm/phase0/model_profile.py \
+python3 phase0/model_profile.py \
   path/to/model-00001.gguf path/to/model-00002.gguf \
-  --json moevm/runs/model_profile.json \
-  --md moevm/runs/model_profile.md
+  --json runs/model_profile.json \
+  --md runs/model_profile.md
 ```
 
 The current production path supports the split `gate/up/down` routed expert

@@ -120,7 +120,7 @@ external/llama.cpp/build/bin/llama-moe-trace \
 
 Best old `-ngl0` comparison:
 
-- JSON: `moevm/runs/qwen3_next_q4_decode100_ngl0_opoffload_b1_cap256_compare.json`
+- JSON: `runs/qwen3_next_q4_decode100_ngl0_opoffload_b1_cap256_compare.json`
 - Speedup: 5.12 / 3.03 = 1.69x
 - `same_tokens=true`
 - `callback_fallback=0`
@@ -131,7 +131,7 @@ Best old `-ngl0` comparison:
 
 Best current `-ngl99` comparison:
 
-- JSON: `moevm/runs/qwen3_next_q4_decode100_ngl99_sparse_mmap_cap64_kvfaauto_compare.json`
+- JSON: `runs/qwen3_next_q4_decode100_ngl99_sparse_mmap_cap64_kvfaauto_compare.json`
 - Speedup: 13.08 / 4.24 = 3.08x
 - `same_tokens=true`
 - `callback_fallback=0`
@@ -210,8 +210,8 @@ Graph-build scheduler hook validation:
 
 Active-k quality gate:
 
-- Harness: `moevm/phase0/qwen_activek_quality.py`.
-- Run: `moevm/runs/qwen_activek_quality_k8_k6_20260705/summary.md`.
+- Harness: `phase0/qwen_activek_quality.py`.
+- Run: `runs/qwen_activek_quality_k8_k6_20260705/summary.md`.
 - Modes: base top-k, `--moevm-active-experts 8`, and `--moevm-active-experts 6` on five deterministic Python code-generation tasks.
 - Gate result: pass, with zero regressions on tasks passed by the base mode, zero demand reads, and zero runtime errors.
 - Base passed 2/5 tasks; active8 passed 3/5; active6 passed 3/5. Active modes preserved both base-passing tasks and improved `merge_sorted`, but did not make the hard tasks consistently reliable.

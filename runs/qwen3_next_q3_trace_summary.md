@@ -19,7 +19,7 @@
 
 Sidecar:
 
-- Plan: `moevm/runs/qwen3_next_q3_sidecar_plan.json`
+- Plan: `runs/qwen3_next_q3_sidecar_plan.json`
 - Packed file: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm`
 - Records: 24,576 = 48 layers x 512 experts.
 - Payload: 31.35 GiB.
@@ -46,15 +46,15 @@ Result:
 
 Runtime index:
 
-- Indexer: `moevm/phase0/sidecar_index.py`
+- Indexer: `phase0/sidecar_index.py`
 - Index file: `$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.idx`
 - Index size: 393,272 bytes.
 - Layout: dense `layer * expert_count + expert -> pack_offset, bytes`.
 
 C++ replay:
 
-- Source: `moevm/phase0/pager_replay.cpp`
-- Binary: `moevm/phase0/pager_replay`
+- Source: `phase0/pager_replay.cpp`
+- Binary: `phase0/pager_replay`
 - Mode: sync `pread` from packed sidecar, same LRU policy as Python replay.
 
 | Trace | Tokens | Hit | Read ops | Read GiB | Elapsed s | Replay tok/s | Read GB/s |
@@ -113,7 +113,7 @@ Interpretation: the 8GiB arena model behaves cleanly on these traces. Code reach
 
 Long trace:
 
-- Trace: `moevm/runs/qwen3_next_q3_trace_code_long1.jsonl`
+- Trace: `runs/qwen3_next_q3_trace_code_long1.jsonl`
 - Prompt tokens: 633.
 - Records: 29,751.
 - Expert accesses: 297,510.
@@ -165,7 +165,7 @@ Local `llama-moe-trace` now supports `--trace-candidates N`.
 
 Smoke trace:
 
-- File: `moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl`
+- File: `runs/qwen3_next_q3_trace_candidates_smoke.jsonl`
 - Prompt tokens: 13.
 - Topk records: 611.
 - Candidate records: 611.
@@ -181,7 +181,7 @@ Format:
 
 Long candidate trace:
 
-- Trace: `moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`
+- Trace: `runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`
 - Prompt tokens: 633.
 - Topk records: 29,751.
 - Candidate records: 29,751.
@@ -227,11 +227,11 @@ Verdict:
 
 New files:
 
-- `moevm/phase0/moevm_runtime.hpp`
-- `moevm/phase0/moevm_runtime.cpp`
-- `moevm/phase0/runtime_smoke.cpp`
-- `moevm/phase0/runtime_replay.cpp`
-- `moevm/phase0/sidecar_component_index.py`
+- `phase0/moevm_runtime.hpp`
+- `phase0/moevm_runtime.cpp`
+- `phase0/runtime_smoke.cpp`
+- `phase0/runtime_replay.cpp`
+- `phase0/sidecar_component_index.py`
 
 Runtime contract:
 
@@ -243,7 +243,7 @@ Runtime contract:
 
 Smoke run:
 
-- Trace: `moevm/runs/qwen3_next_q3_trace_candidates_smoke.jsonl`.
+- Trace: `runs/qwen3_next_q3_trace_candidates_smoke.jsonl`.
 - Arena: 64MiB.
 - In-flight cap: 16MiB.
 - Threads: 2.
@@ -256,8 +256,8 @@ This proves the standalone runtime boundary can do the real operation the final 
 
 Runtime-driven long replay:
 
-- Source: `moevm/phase0/runtime_replay.cpp`.
-- Trace: `moevm/runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`.
+- Source: `phase0/runtime_replay.cpp`.
+- Trace: `runs/qwen3_next_q3_trace_code_long1_candidates.jsonl`.
 - Arena: 8GiB.
 - In-flight cap: 64MiB.
 - Threads: 4.
@@ -283,7 +283,7 @@ Comparison against benchmark-only `pager_replay.cpp` candidate top10:
 
 ## Oracle Prefetch Simulation
 
-Tool: `moevm/phase0/prefetch_sim.py`.
+Tool: `phase0/prefetch_sim.py`.
 
 This is an upper bound, not a real decoder guarantee. It assumes the runtime can look ahead in the recorded route stream.
 

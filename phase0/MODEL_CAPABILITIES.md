@@ -32,10 +32,10 @@ Blocked until an adapter exists:
 1. Profile the exact GGUF shard set:
 
 ```bash
-python3 moevm/phase0/model_profile.py \
+python3 phase0/model_profile.py \
   model-00001-of-00002.gguf model-00002-of-00002.gguf \
-  --json moevm/runs/model_profile.json \
-  --md moevm/runs/model_profile.md
+  --json runs/model_profile.json \
+  --md runs/model_profile.md
 ```
 
 2. Build sidecar artifacts only if `sidecar_plan_split_v0` and
