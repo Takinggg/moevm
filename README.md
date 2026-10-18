@@ -6,13 +6,15 @@ expert weights are packed into a sidecar file and paged on demand into a
 persistent Metal pool, inside a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp).
 The output is checked bit for bit against llama.cpp with MoEVM turned off.
 
-- **Qwen3-Coder-Next Q4_K_M (45.2 GiB):** 4.24 → **21.90 tok/s** decode versus
-  llama.cpp's `--op-offload` path, and about **2×** the best configuration
-  without MoEVM (10.90 tok/s). Token output is identical to the `--op-offload`
-  baseline.
-- **gpt-oss-120b Q4_K_M (58 GiB, larger than the machine's RAM):** **8.72 tok/s**
-  decode, median of 5 runs at a 4096-token context, with zero demand reads,
-  zero runtime errors and no memory-pressure events.
+- **Qwen3-Coder-Next Q4_K_M (45.2 GiB, more than the 40.2 GB Metal working-set
+  limit of this Mac):** **6.41 → 19.90 tok/s** decode (3.1×) against the same
+  llama.cpp build with MoEVM off: same prompt, 1024 tokens, routing traces off
+  on both sides. Logits are bit-identical at all 1024 positions over the full
+  151,936-token vocabulary.
+- **gpt-oss-120b Q4_K_M (58 GiB, more than the 48 GB of RAM):** **8.72 tok/s**
+  decode, median of 5 runs at a 4096-token context with a 990-token prompt, with
+  zero demand reads and no memory-pressure events. Four parallel sequences
+  reach 26.81 tok/s in aggregate.
 - **Correctness gate:** logits parity `max_abs = 0.0` on both models.
 
 Status: research prototype, measured on one machine. The 6-hour stability soak
@@ -20,41 +22,47 @@ was never completed (see [Status](#status)).
 
 ## Results
 
-Machine: MacBook Pro, Apple M5 Pro, 48 GB unified memory. Single stream,
-batch size 1 (`-b 1 -ub 1`), greedy decoding (`--temp 0`). Throughput is the
-decode tok/s printed by `llama-moe-trace`.
+Machine: MacBook Pro, Apple M5 Pro, 48 GB unified memory. Greedy decoding
+(`--temp 0`); single-sequence rows use `-b 1 -ub 1`. Throughput is the decode
+tok/s printed by `llama-moe-trace`, with routing traces off.
 
 | Model | Configuration | Decode tok/s | Correctness | Source |
 |---|---|---:|---|---|
-| Qwen3-Coder-Next Q4_K_M, 45.2 GiB | llama.cpp `--op-offload`, MoEVM off | 4.24 | reference | [log](runs/evidence/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log) |
-| | Best configuration without MoEVM: experts computed on CPU, `--no-op-offload` | 10.90 | different numerics, output diverges at token 39 | [log](runs/evidence/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log) |
-| | **MoEVM graph-build pool** | **21.90** | tokens identical to the reference | [log](runs/evidence/qwen3_next_q4_graph_sched_c192_n50.log) |
-| gpt-oss-120b Q4_K_M, 58 GiB | **MoEVM graph pool, 24 GiB arena, 4096 context** | **8.72** (median of 5) | `demand_reads=0`, `runtime_errors=0` in all 5 runs | [runs](runs/evidence/gpt_oss_120b_median5_observability_24g_20260705/), [summary](runs/gpt_oss_120b_median5_observability_24g_20260705.md) |
+| Qwen3-Coder-Next Q4_K_M, 45.2 GiB | llama.cpp `--op-offload`, MoEVM off, 1024 tokens | 6.41 | reference | [log](runs/evidence/qwen3_next_q4_p0d_parity_stock_ignoreeos_n1024_v2.log) |
+| | **MoEVM pool**, same command plus `--moevm-*` flags | **19.90** | logits bit-identical, 1024 rows | [log](runs/evidence/qwen3_next_q4_p0d_parity_moevm_cap128_ignoreeos_n1024.log), [parity](runs/qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json) |
+| gpt-oss-120b Q4_K_M, 58 GiB | **MoEVM graph pool**, 24 GiB arena, 4096 context, 1 sequence | **8.72** (median of 5) | `demand_reads=0`, `runtime_errors=0` in all 5 runs | [runs](runs/evidence/gpt_oss_120b_median5_observability_24g_20260705/), [summary](runs/gpt_oss_120b_median5_observability_24g_20260705.md) |
+| | MoEVM graph pool, 4 parallel sequences, same prompt | 26.81 aggregate (6.70 per sequence) | `runtime_errors=0` | [log](runs/evidence/gpt_oss_120b_parallel4_observability_n32.log), [summary](runs/gpt_oss_120b_parallel4_aggregate_20260705.md) |
 
 Logits parity (full-vocabulary logits compared at every decoded position):
 
 | Model | Comparison | Rows | `max_abs` | Source |
 |---|---|---:|---:|---|
-| Qwen3-Coder-Next Q4_K_M | MoEVM off vs on (P0.d path, before graph-build) | 1024 | 0.0 | [json](runs/qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json) |
-| Qwen3-Coder-Next Q4_K_M | Graph-build pool off vs on | 50 | 0.0 | [json](runs/evidence/qwen3_next_q4_graph_parity_off_vs_sched_n50.json) |
+| Qwen3-Coder-Next Q4_K_M | MoEVM off vs on (the head-to-head above) | 1024 | 0.0 | [json](runs/qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json) |
+| Qwen3-Coder-Next Q4_K_M | Later graph-build pool, off vs on | 50 | 0.0 | [json](runs/evidence/qwen3_next_q4_graph_parity_off_vs_sched_n50.json) |
 | gpt-oss-120b Q4_K_M | Same-backend Metal reference vs MoEVM | 64 | 0.0 | [json](runs/evidence/gpt_oss_120b_q4_metal_opoffload_vs_moevm_n64_logits_compare.json) |
 
 How to read these numbers:
 
-- Baselines use the same fork binary (`llama-moe-trace`) with MoEVM disabled.
-  They rely on the sparse-mmap loader fix from
+- The Qwen pair differs only by the `--moevm-*` flags: same fork binary
+  (`llama-moe-trace`), prompt, seed, 1536-token context, and `-ngl 99
+  --op-offload` with routed experts on CPU. The baseline relies on the
+  sparse-mmap loader fix from
   [#25309](https://github.com/ggml-org/llama.cpp/pull/25309); without it this
   placement ran out of Metal memory.
-- The three Qwen runs share the prompt, a 192-token context and the seed, but
-  decode different lengths (92 tokens until end of sequence, 100, and 50).
-- The Qwen figures come from short-context runs. The gpt-oss figure is from a
-  4096-token context with a 990-token prompt, so the two rows are not directly
-  comparable.
+- MoEVM does not beat llama.cpp in general. On this machine, llama.cpp on CPU
+  only (`-ngl 0`, 512–1024-token context, prompts of 47–67 tokens, even with
+  routing traces on) decodes gpt-oss-120b at 10.85–14.36 tok/s
+  ([summary](runs/gpt_oss_120b_q4_benchmark_summary.md#trace)). That is a
+  shorter context than the 8.72 tok/s run, so the two are not directly
+  comparable. MoEVM's gain is against the GPU/Metal paths, with bounded memory.
+- The parallel figure is aggregate throughput over 32 decode steps per
+  sequence; it does not lower single-sequence latency.
 - The lab notes in [`phase0/RUNBOOK.md`](phase0/RUNBOOK.md) and
-  [`runs/*.md`](runs/) record every intermediate and superseded measurement.
-  The tables above are the reference numbers. In particular, the best earlier
-  gpt-oss single runs were faster than 8.72 tok/s; the median of five at 4096
-  context replaces them.
+  [`runs/*.md`](runs/) record every intermediate measurement, including runs
+  with routing traces on, warm-cache replays and superseded figures. The tables
+  above are the reference numbers. In particular, the best earlier gpt-oss
+  single runs were faster than 8.72 tok/s; the median of five at 4096 context
+  replaces them.
 - [`runs/evidence/`](runs/evidence/) holds the raw logs behind each row, with
   only local paths redacted.
 
@@ -77,9 +85,11 @@ How to read these numbers:
    footprint before memory pressure becomes fatal.
 8. Treat logits parity as the correctness gate, not only token matching.
 
-On 512-token coding traces of gpt-oss, plain LRU is already close to the
-offline-optimal Belady policy, so further gains are expected from prefetch
-timing, orchestration and copied bytes rather than from a smarter cache policy.
+On 512-token coding traces of gpt-oss with a 28 GiB budget, plain LRU hits
+95.10–95.75% of expert accesses against 97.15–97.49% for the offline-optimal
+Belady policy ([RUNBOOK](phase0/RUNBOOK.md)), so further gains are expected from
+prefetch timing, orchestration and copied bytes rather than from a smarter
+cache policy.
 Metal timestamp diagnostics show the GPU far from saturated: the bottleneck is
 CPU and scheduler rendezvous, mostly expert-id readback.
 
@@ -96,13 +106,13 @@ CPU and scheduler rendezvous, mostly expert-id readback.
 
 - Fork branch: [`Takinggg/llama.cpp@codex/moevm-graph-build`](https://github.com/Takinggg/llama.cpp/tree/codex/moevm-graph-build).
   The tag [`moevm-p0d-audit-hardened`](https://github.com/Takinggg/llama.cpp/releases/tag/moevm-p0d-audit-hardened)
-  marks the audited P0.d runtime, the `--op-offload`-based path that preceded
-  the graph-build pool.
+  marks the audited P0.d runtime, the `--op-offload`-based path that produced
+  the Qwen head-to-head, before the graph-build pool.
 - Upstream: draft PR [ggml-org/llama.cpp#25309](https://github.com/ggml-org/llama.cpp/pull/25309),
   *loader: map sparse mmap tensor ranges*. It maps only the tensor ranges a
   Metal buffer needs instead of one span from the first to the last tensor of a
   GGUF file. Without it, `-ngl 99` with experts on CPU ran out of Metal memory
-  on this machine, so it enables both baselines above.
+  on this machine, so the Qwen baseline above depends on it.
 
 ## Reproduce
 
@@ -146,35 +156,55 @@ python3 phase0/sidecar_component_index.py --plan runs/qwen3_next_q4_sidecar_plan
 `sidecar_pack.py` must run with `--nocache` under `safe_run.py`; otherwise
 writing 43.69 GiB fills the unified-memory file cache.
 
-### 3. Run the Qwen comparison
+### 3. Run the Qwen head-to-head
 
-MoEVM graph-build pool (the 21.90 tok/s row):
+The head-to-head was measured on the audited P0.d runtime. To rebuild that
+exact runtime first:
 
 ```bash
-python3 phase0/safe_run.py --log runs/repro_qwen_q4_moevm.log --max-seconds 600 -- \
+git -C external/llama.cpp checkout moevm-p0d-audit-hardened
+cmake --build external/llama.cpp/build -j
+```
+
+MoEVM off (the 6.41 tok/s row):
+
+```bash
+python3 phase0/safe_run.py --log runs/repro_qwen_q4_off.log --max-seconds 900 -- \
   /usr/bin/env GGML_OP_OFFLOAD_MIN_BATCH=1 external/llama.cpp/build/bin/llama-moe-trace \
   -m "$Q/Qwen3-Coder-Next-Q4_K_M.gguf" \
+  --logits-out runs/repro_qwen_q4_off.logits \
+  -ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --op-offload --no-repack \
+  -c 1536 -b 1 -ub 1 -n 1024 --ignore-eos --temp 0 -s 1 \
+  -p 'Write a Python function that parses log lines into records.'
+```
+
+MoEVM on (the 19.90 tok/s row): the same command plus the sidecar flags.
+
+```bash
+python3 phase0/safe_run.py --log runs/repro_qwen_q4_moevm.log --max-seconds 900 -- \
+  /usr/bin/env GGML_OP_OFFLOAD_MIN_BATCH=1 external/llama.cpp/build/bin/llama-moe-trace \
+  -m "$Q/Qwen3-Coder-Next-Q4_K_M.gguf" \
+  --logits-out runs/repro_qwen_q4_moevm.logits \
   --moevm-index "$Q/qwen3-next-q4.moevm.idx" \
   --moevm-component-index "$Q/qwen3-next-q4.moevm.cidx" \
   --moevm-sidecar "$Q/qwen3-next-q4.moevm" \
   --moevm-arena-gib 1 --moevm-inflight-mib 64 --moevm-threads 4 --moevm-prefetch-topk 10 \
   --moevm-copy-mode memcpy --moevm-cache --moevm-pool-layer all --moevm-pool-capacity 128 \
-  --moevm-graph-mode pool \
-  -ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --no-op-offload --no-repack \
-  -c 192 -b 1 -ub 1 -n 50 --ignore-eos --temp 0 -s 1 \
-  -p 'def add(a, b): return a + b'
+  -ngl 99 -ot '.*ffn_.*_exps.weight=CPU' --op-offload --no-repack \
+  -c 1536 -b 1 -ub 1 -n 1024 --ignore-eos --temp 0 -s 1 \
+  -p 'Write a Python function that parses log lines into records.'
 ```
 
-`--op-offload` baseline (the 4.24 tok/s row): same binary without any `--moevm-*` flag,
-with `--op-offload` instead of `--no-op-offload`, `-n 100` and no
-`--ignore-eos`. The exact command lines are the first line of each log in
-[`runs/evidence/`](runs/evidence/).
-
-To check parity, add `--logits-out <file>.logits` to both runs and compare:
+Compare the logits:
 
 ```bash
-python3 phase0/compare_logits.py baseline.logits moevm.logits --json runs/repro_parity.json
+python3 phase0/compare_logits.py runs/repro_qwen_q4_off.logits runs/repro_qwen_q4_moevm.logits --json runs/repro_parity.json
 ```
+
+Each `.logits` file is about 600 MiB. The exact command lines of the reference
+runs are the first line of each log in [`runs/evidence/`](runs/evidence/).
+Switch back to the branch (`git -C external/llama.cpp checkout
+codex/moevm-graph-build` and rebuild) for the gpt-oss runs.
 
 ### 4. gpt-oss-120b median-of-5
 
@@ -199,6 +229,11 @@ crashed this machine earlier stay blocked by `safe_run.py`.
   the same paging does not apply; a dense 1T model will not run interactively on
   a 48 GB laptop.
 - Measured on one machine. Other Apple Silicon configurations are untested.
+- MoEVM is not faster than llama.cpp in every setup: CPU-only llama.cpp decodes
+  gpt-oss-120b at 10.85–14.36 tok/s with short contexts on this machine. The
+  measured win is against the GPU/Metal paths, with bounded memory.
+- Qwen3-Coder-Next (45.2 GiB) fits in the 48 GB of RAM; what it exceeds is
+  Metal's 40.2 GB working-set limit. Only gpt-oss-120b is larger than RAM.
 - The packer supports split `gate/up/down` routed expert tensors. Fused
   `gate_up` or custom expert layouts need a layout adapter first.
 - Every new model needs a capability profile and a same-backend logits parity
@@ -224,8 +259,9 @@ Done:
 
 Not done:
 
-- **The 6-hour soak was never completed.** A pilot was started on 2026-07-05
-  and stopped early on purpose. The final soak defined in
+- **The 6-hour soak was never completed.** Only a pilot of about 30 minutes
+  ran on 2026-07-05 before it was stopped on purpose, and its validation was
+  never finished. The final soak defined in
   [`docs/SOAK_CRITERIA.md`](docs/SOAK_CRITERIA.md) has not been run, so
   long-run stability is not established.
 - Rewriting expert-id readback and orchestration, the main remaining
