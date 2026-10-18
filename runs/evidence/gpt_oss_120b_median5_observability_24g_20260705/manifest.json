@@ -1,0 +1,39 @@
+{
+  "started_at": "2026-07-05T03:25:47.734436+00:00",
+  "log_show_start": "2026-07-05 05:25:47",
+  "hours": 6.0,
+  "iterations": 5,
+  "arena_gib": 24.0,
+  "trim_min_gib": 12.0,
+  "ctx": 4096,
+  "batch": 1,
+  "ubatch": 1,
+  "tokens": 128,
+  "inflight_mib": 64.0,
+  "moevm_threads": 4,
+  "moevm_threads_requested": "4",
+  "moevm_threads_policy": "explicit",
+  "prefetch_topk": 4,
+  "active_experts": -1,
+  "copy_mode": "memcpy",
+  "sidecar_cache": false,
+  "direct_mmap": false,
+  "pool_capacity": 16,
+  "pool_dynamic_extent": false,
+  "logits_every": 0,
+  "graph_fill_site": "sched",
+  "metal_timestamps": false,
+  "model_profile": "runs/gpt_oss_120b_median5_observability_24g_20260705/model_profile.json",
+  "model_profile_status": "runtime_check",
+  "profile_gguf": [
+    "$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf",
+    "$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00002-of-00002.gguf"
+  ],
+  "prompts": [
+    {
+      "name": "observability",
+      "file": "runs/prompt_observability_512plus.txt",
+      "text": null
+    }
+  ]
+}

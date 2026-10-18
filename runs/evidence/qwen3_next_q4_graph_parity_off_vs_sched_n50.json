@@ -1,0 +1,22 @@
+{
+  "same_shape": true,
+  "n_vocab": 151936,
+  "rows": 50,
+  "token_mismatch_count": 0,
+  "token_mismatches_sample": [],
+  "argmax_match_count": 50,
+  "argmax_mismatch_count": 0,
+  "argmax_mismatches_sample": [],
+  "max_abs": 0.0,
+  "max_abs_at": {
+    "row": 0,
+    "token": 0
+  },
+  "mean_abs": 0.0,
+  "rms_abs": 0.0,
+  "sampled_token_max_abs": 0.0,
+  "sampled_token_max_abs_at": {
+    "row": 0,
+    "token": 198
+  }
+}

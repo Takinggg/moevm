@@ -1,0 +1,19 @@
+$ /usr/bin/env GGML_OP_OFFLOAD_MIN_BATCH=1 external/llama.cpp/build/bin/llama-moe-trace -m $MOEVM_MODELS_DIR/qwen3-coder-next-q4/Qwen3-Coder-Next-Q4_K_M.gguf --trace-out runs/qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.jsonl --trace-candidates 10 -ngl 99 -ot .*ffn_.*_exps.weight=CPU --op-offload --no-repack -c 192 -b 1 -ub 1 -n 100 --temp 0 -s 1 -p def add(a, b): return a + b
+
+0.00.230.542 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.00.254.190 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance
+0.11.400.216 I system_info: n_threads = 6 (n_threads_batch = 6) / 18 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | SME = 1 | ACCELERATE = 1 | REPACK = 1 | 
+0.12.278.486 I traced 1 / 10 prompt tokens, records=94
+0.12.961.426 I traced 2 / 10 prompt tokens, records=188
+0.13.580.799 I traced 3 / 10 prompt tokens, records=282
+0.14.103.552 I traced 4 / 10 prompt tokens, records=376
+0.14.548.407 I traced 5 / 10 prompt tokens, records=470
+0.14.961.461 I traced 6 / 10 prompt tokens, records=564
+0.15.391.901 I traced 7 / 10 prompt tokens, records=658
+0.15.842.328 I traced 8 / 10 prompt tokens, records=752
+0.16.216.570 I traced 9 / 10 prompt tokens, records=846
+0.16.486.846 I traced 10 / 10 prompt tokens, records=942
+0.38.199.115 I decode stopped at EOG after 92 / 100 tokens
+0.38.199.119 I decoded 92 / 100 tokens in 21.712s, 4.24 tok/s, records=9774
+0.38.199.125 I generated_token_ids=[198,750,1186,2877,11,293,1648,470,264,481,293,198,750,15602,2877,11,293,1648,470,264,353,293,198,750,3429,2877,11,293,1648,470,264,608,293,271,750,1887,3932,262,1173,492,14990,504,10035,36180,262,1173,25906,7,16,11,220,17,1171,262,1173,10624,7,16,11,220,17,1171,262,1173,1255,360,7,16,11,220,17,1171,262,1173,38291,7,16,11,220,17,4390,333,1304,606,563,621,12112,3817,16179,262,1887,368,151643]
+0.38.199.157 I moe trace records written: 9774

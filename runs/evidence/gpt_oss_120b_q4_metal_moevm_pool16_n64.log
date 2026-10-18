@@ -1,0 +1,31 @@
+$ /usr/bin/env GGML_OP_OFFLOAD_MIN_BATCH=1 external/llama.cpp/build/bin/llama-moe-trace -m $MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf --moevm-index $MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx --moevm-component-index $MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx --moevm-sidecar $MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm --moevm-arena-gib 16 --moevm-inflight-mib 64 --moevm-threads 4 --moevm-prefetch-topk 4 --moevm-copy-mode memcpy --moevm-pool-layer all --moevm-pool-capacity 16 --moevm-graph-mode pool --moevm-no-integrity-check -ngl 99 -ot .*ffn_.*_exps.weight=CPU --no-op-offload --no-repack -fa off -c 128 -b 1 -ub 1 -n 64 --ignore-eos --temp 0 -s 1 -p def add(a, b): return a + b --logits-out runs/gpt_oss_120b_q4_metal_moevm_pool16_n64.logits --generated-out runs/gpt_oss_120b_q4_metal_moevm_pool16_n64.txt
+
+0.00.037.205 I MoE trace disabled: running without cb_eval/readback tracing
+0.00.460.566 W load: setting token '<|message|>' (200008) attribute to USER_DEFINED (16), old attributes: 8
+0.00.460.571 W load: setting token '<|constrain|>' (200003) attribute to USER_DEFINED (16), old attributes: 8
+0.00.460.730 W load: setting token '<|channel|>' (200005) attribute to USER_DEFINED (16), old attributes: 8
+0.00.460.983 W load: setting token '<|start|>' (200006) attribute to USER_DEFINED (16), old attributes: 8
+0.00.462.062 W load: special_eog_ids contains both '<|return|>' and '<|call|>', or '<|calls|>' and '<|flush|>' tokens, removing '<|end|>' token from EOG list
+0.00.488.631 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance
+0.13.838.135 I logits dump enabled: path=runs/gpt_oss_120b_q4_metal_moevm_pool16_n64.logits n_vocab=201088
+0.14.678.794 I MoEVM enabled: arena=16.00GiB inflight=64.00MiB threads=4 prefetch_topk=4 copy_debug=0 direct_mmap=0 nocache=1 copy_mode=memcpy shadow_ids=0 compact_layer=-1 compact_k_max=64 pool_layer=-2 pool_capacity=16 graph_mode=pool resident_cache=0 defer_input_wait=1 inject_delay_us=0 test_force_pinned_fence=0
+0.14.678.803 I MoEVM graph-mode installed: mode=pool backend=MTL0 buft=MTL0
+0.14.678.821 I system_info: n_threads = 6 (n_threads_batch = 6) / 18 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | SME = 1 | ACCELERATE = 1 | REPACK = 1 | 
+0.15.594.144 I traced 1 / 10 prompt tokens, records=0
+0.15.795.280 I traced 2 / 10 prompt tokens, records=0
+0.15.968.022 I traced 3 / 10 prompt tokens, records=0
+0.16.108.325 I traced 4 / 10 prompt tokens, records=0
+0.16.199.443 I traced 5 / 10 prompt tokens, records=0
+0.16.328.288 I traced 6 / 10 prompt tokens, records=0
+0.16.438.409 I traced 7 / 10 prompt tokens, records=0
+0.16.547.701 I traced 8 / 10 prompt tokens, records=0
+0.16.650.081 I traced 9 / 10 prompt tokens, records=0
+0.16.725.559 I traced 10 / 10 prompt tokens, records=0
+0.22.273.292 I decoded 64 / 64 tokens in 5.548s, 11.54 tok/s, records=0
+0.22.273.298 I generated_token_ids=[279,1314,71973,6271,11,287,3127,622,261,533,287,279,1314,57388,6271,11,287,3127,622,261,425,287,279,1314,38484,6271,11,287,3127,622,261,820,287,279,1314,3470,6271,11,287,3127,622,261,6240,287,279,1314,44237,6271,3127,622,13324,38011,6271,1029,1314,2187,6271,3127,622,13324,35734,6271,1029,1314]
+0.22.273.519 I generated text written: path=runs/gpt_oss_120b_q4_metal_moevm_pool16_n64.txt bytes=203
+0.22.273.578 I MoEVM prefetch_records=0 copy_prefetches=2655 copy_prefetch_skips=0 copy_hook_calls=0 handled=0 copied_experts=14538 copied_bytes=64060243200 copy_mode=memcpy async_ops=0 memcpy_ops=14538 shadow_ids_attempts=0 shadow_ids_applied=0 shadow_ids_fallback=0 compact_attempts=0 compact_applied=0 compact_fallback=0 fallback_k_overflow=0 pool_attempts=0 pool_applied=0 pool_fallback=0 pool_component_hits=17322 pool_component_misses=14538 pool_evictions=4270 pool_fallback_shape=0 pool_fallback_ids_read=0 pool_fallback_alloc=0 pool_fallback_alloc_layer=0 pool_fallback_alloc_pool=0 pool_fallback_alloc_pool_data=0 pool_fallback_alloc_shadow=0 pool_fallback_alloc_shadow_data=0 pool_fallback_alloc_shadow_bytes=0 pool_fallback_plan=0 pool_fallback_remap=0 pool_fallback_fill=0 pool_submit_epoch=2655 pool_completed_epoch=2654 pool_epoch_drains=2654 pool_forced_fences=0 pool_pinned_eviction_skips=0 graph_patch_attempts=540 graph_patch_applied=540 graph_patch_fallback=0 graph_topk_fills=2655 graph_fill_fallback=0 delay_injections=0 delay_us=0 resident_cache_hits=0 resident_cache_misses=0 resident_cache_resets=0 runtime_errors=0
+0.22.273.581 I MoEVM runtime demand_reads=0 prefetch_reads=1810 waits=1102 wait_s=2.067059 evictions=511 high_water=16.00GiB delay_injections=0 delay_us=0
+0.22.273.583 I MoEVM backend copy_stats split_inputs=666 user_inputs=592 eligible=0 ids_refreshes=2664 attempts=2664 handled=2664 callback_fallback=0 graph_patches=7992 graph_patch_restores=7992 normal_fallback=74 graph_empty=0 non_weight=74 non_host_weight=0 first_node_not_mul_mat_id=0 src0_mismatch=0
+0.22.273.587 I MoEVM backend timing backend_sync_calls=3792 backend_sync_us=2398806 event_sync_calls=0 event_sync_us=0 event_wait_calls=0 event_wait_us=0 graph_compute_calls=2812 graph_compute_us=118094 user_input_wait_calls=592 user_input_wait_us=88221 split_input_wait_calls=74 split_input_wait_us=18 defer_input_wait_skips=0 defer_input_wait_disabled_events=0 moe_input_sync_calls=0 moe_input_sync_us=0 ids_readback_calls=2664 ids_readback_us=2159195 callback_us=4344728 normal_copy_us=50 metal_cmd_buffers=0 metal_gpu_busy_us=0 metal_gpu_timestamp_missing=0
+0.22.273.758 I logits rows written: 64

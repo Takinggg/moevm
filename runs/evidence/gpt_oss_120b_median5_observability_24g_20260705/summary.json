@@ -1,0 +1,9 @@
+{
+  "started_at": "2026-07-05T03:25:47.734436+00:00",
+  "finished_at": "2026-07-05T03:33:20.485123+00:00",
+  "iterations": 5,
+  "failures": 0,
+  "results": "runs/gpt_oss_120b_median5_observability_24g_20260705/results.jsonl",
+  "jetsam_log": "runs/gpt_oss_120b_median5_observability_24g_20260705/jetsam_after.log",
+  "jetsam_bytes": 361
+}

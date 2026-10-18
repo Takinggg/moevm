@@ -1,0 +1,2 @@
+Timestamp               Ty Process[PID:TID]
+2026-07-05 05:33:19.204 Df log[3224:2c67e3] [com.apple.log:] log run noninteractively, parent: 405 (Python), args: 'log' 'show' '--start' '2026-07-05 05:25:47' '--style' 'compact' '--predicate' 'eventMessage CONTAINS[c] "JetsamEvent" OR eventMessage CONTAINS[c] "jettisoned" OR eventMessage CONTAINS[c] "memorystatus

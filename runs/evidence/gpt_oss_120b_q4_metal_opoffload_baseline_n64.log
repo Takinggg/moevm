@@ -1,0 +1,25 @@
+$ /usr/bin/env GGML_OP_OFFLOAD_MIN_BATCH=1 external/llama.cpp/build/bin/llama-moe-trace -m $MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf -ngl 99 -ot .*ffn_.*_exps.weight=CPU --op-offload --no-repack -fa off -c 128 -b 1 -ub 1 -n 64 --ignore-eos --temp 0 -s 1 -p def add(a, b): return a + b --logits-out runs/gpt_oss_120b_q4_metal_opoffload_baseline_n64.logits --generated-out runs/gpt_oss_120b_q4_metal_opoffload_baseline_n64.txt
+
+0.00.036.002 I MoE trace disabled: running without cb_eval/readback tracing
+0.00.463.486 W load: setting token '<|message|>' (200008) attribute to USER_DEFINED (16), old attributes: 8
+0.00.463.490 W load: setting token '<|constrain|>' (200003) attribute to USER_DEFINED (16), old attributes: 8
+0.00.463.645 W load: setting token '<|channel|>' (200005) attribute to USER_DEFINED (16), old attributes: 8
+0.00.463.908 W load: setting token '<|start|>' (200006) attribute to USER_DEFINED (16), old attributes: 8
+0.00.465.013 W load: special_eog_ids contains both '<|return|>' and '<|call|>', or '<|calls|>' and '<|flush|>' tokens, removing '<|end|>' token from EOG list
+0.00.491.711 W llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance
+0.13.279.813 I logits dump enabled: path=runs/gpt_oss_120b_q4_metal_opoffload_baseline_n64.logits n_vocab=201088
+0.13.279.831 I system_info: n_threads = 6 (n_threads_batch = 6) / 18 | MTL : EMBED_LIBRARY = 1 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | SME = 1 | ACCELERATE = 1 | REPACK = 1 | 
+0.15.211.315 I traced 1 / 10 prompt tokens, records=0
+0.17.066.271 I traced 2 / 10 prompt tokens, records=0
+0.18.576.875 I traced 3 / 10 prompt tokens, records=0
+0.19.664.319 I traced 4 / 10 prompt tokens, records=0
+0.20.422.872 I traced 5 / 10 prompt tokens, records=0
+0.21.392.497 I traced 6 / 10 prompt tokens, records=0
+0.22.157.099 I traced 7 / 10 prompt tokens, records=0
+0.23.007.989 I traced 8 / 10 prompt tokens, records=0
+0.23.886.552 I traced 9 / 10 prompt tokens, records=0
+0.24.508.151 I traced 10 / 10 prompt tokens, records=0
+0.47.026.466 I decoded 64 / 64 tokens in 22.518s, 2.84 tok/s, records=0
+0.47.026.473 I generated_token_ids=[279,1314,71973,6271,11,287,3127,622,261,533,287,279,1314,57388,6271,11,287,3127,622,261,425,287,279,1314,38484,6271,11,287,3127,622,261,820,287,279,1314,3470,6271,11,287,3127,622,261,6240,287,279,1314,44237,6271,3127,622,13324,38011,6271,1029,1314,2187,6271,3127,622,13324,35734,6271,1029,1314]
+0.47.026.703 I generated text written: path=runs/gpt_oss_120b_q4_metal_opoffload_baseline_n64.txt bytes=203
+0.47.026.866 I logits rows written: 64

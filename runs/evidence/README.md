@@ -1,0 +1,39 @@
+# Evidence for the README results table
+
+Raw outputs behind each headline number, copied from the original run
+directory. Everything else from those runs (traces, `.logits` dumps, hundreds of
+exploratory logs) stays out of the repository because of size.
+
+The only edit made to these files is path redaction: absolute paths on the
+author's machine were rewritten to repo-relative form (`runs/...`,
+`external/llama.cpp/...`) and model paths to `$MOEVM_MODELS_DIR/...`. Numbers,
+token ids and counters are untouched.
+
+## Qwen3-Coder-Next Q4_K_M (45.2 GiB GGUF)
+
+All three runs use the same prompt (`def add(a, b): return a + b`), `-c 192`,
+`-b 1 -ub 1`, `--temp 0 -s 1`, `-ngl 99` with routed experts overridden to CPU.
+Decode lengths differ (92 tokens until EOS, 100, and 50). MoEVM and the stock
+`--op-offload` run generate identical token ids over their 50 shared tokens.
+The `--no-op-offload` run computes routed experts on the CPU instead of Metal,
+so its numerics differ and its output diverges from the other two at token 39.
+
+| File | What it shows |
+|---|---|
+| `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_opoffload_kvfaauto.log` | Stock llama.cpp with `--op-offload`: 4.24 tok/s |
+| `qwen3_next_q4_baseline_decode100_ngl99_sparse_mmap_noopoffload_kvfaauto.log` | Best configuration without MoEVM (`--no-op-offload`, CPU experts): 10.90 tok/s |
+| `qwen3_next_q4_graph_sched_c192_n50.log` | MoEVM graph-build pool, cap 128: 21.90 tok/s, `runtime_errors=0` |
+| `qwen3_next_q4_graph_parity_off_vs_sched_n50.json` | Graph pool off vs on: 50 rows, `max_abs=0.0`, zero token/argmax mismatches |
+| `../qwen3_next_q4_p0d_parity_stock_vs_moevm_n1024.json` | Stock llama.cpp vs MoEVM: 1024 rows, `max_abs=0.0`, zero token/argmax mismatches |
+
+## gpt-oss-120b Q4_K_M (58 GiB GGUF, 2 shards)
+
+| File | What it shows |
+|---|---|
+| `gpt_oss_120b_median5_observability_24g_20260705/` | Five runs at `c=4096`, 990-token prompt, 128 decoded tokens, 24 GiB arena. Median 8.72 tok/s; `demand_reads=0`, `runtime_errors=0` and no pressure events in every run (`results.jsonl`, `summary.json`). |
+| `gpt_oss_120b_q4_metal_opoffload_baseline_n64.log` | Same-backend Metal reference (`--op-offload`) for the parity gate |
+| `gpt_oss_120b_q4_metal_moevm_pool16_n64.log` | MoEVM graph pool, cap 16, same prompt and placement |
+| `gpt_oss_120b_q4_metal_opoffload_vs_moevm_n64_logits_compare.json` | Reference vs MoEVM: 64 rows, `max_abs=0.0`, zero token/argmax mismatches |
+
+The single-run tok/s printed in the two n64 logs come from a short prompt and
+are not headline numbers; the median-of-5 run above is.
