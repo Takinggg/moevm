@@ -21,15 +21,13 @@ from pathlib import Path
 from compare_decode_logs import parse_log
 
 
-ROOT = Path(__file__).resolve().parents[2]
-RUNS = ROOT / "moevm/runs"
-SAFE_RUN = ROOT / "moevm/phase0/safe_run.py"
-LLAMA_BIN = ROOT / "external/llama.cpp/build/bin/llama-moe-trace"
+from moevm_paths import LLAMA_BIN, MODELS_DIR, RUNS, SAFE_RUN
 
-DEFAULT_MODEL = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf")
-DEFAULT_INDEX = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx")
-DEFAULT_COMPONENT_INDEX = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx")
-DEFAULT_SIDECAR = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm")
+
+DEFAULT_MODEL = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf"
+DEFAULT_INDEX = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx"
+DEFAULT_COMPONENT_INDEX = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx"
+DEFAULT_SIDECAR = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm"
 
 
 @dataclass(frozen=True)

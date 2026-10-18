@@ -22,14 +22,13 @@ from pathlib import Path
 from model_profile import build_profile, markdown as model_profile_markdown
 
 
-ROOT = Path(__file__).resolve().parents[2]
-RUNS = ROOT / "moevm/runs"
-SAFE_RUN = ROOT / "moevm/phase0/safe_run.py"
-LLAMA_MOE_TRACE = ROOT / "external/llama.cpp/build/bin/llama-moe-trace"
-DEFAULT_MODEL = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf")
-DEFAULT_INDEX = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx")
-DEFAULT_COMPONENT_INDEX = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx")
-DEFAULT_SIDECAR = Path("$MOEVM_MODELS_DIR/gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm")
+from moevm_paths import LLAMA_BIN as LLAMA_MOE_TRACE, MODELS_DIR, RUNS, SAFE_RUN
+
+
+DEFAULT_MODEL = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-Q4_K_M-00001-of-00002.gguf"
+DEFAULT_INDEX = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.idx"
+DEFAULT_COMPONENT_INDEX = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm.cidx"
+DEFAULT_SIDECAR = MODELS_DIR / "gpt-oss-120b/Q4_K_M/gpt-oss-120b-q4.moevm"
 OBS_PROMPT = RUNS / "prompt_observability_512plus.txt"
 
 

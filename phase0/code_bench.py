@@ -21,14 +21,13 @@ from pathlib import Path
 from compare_decode_logs import parse_log
 
 
-ROOT = Path(__file__).resolve().parents[2]
-LLAMA_BIN = ROOT / "external/llama.cpp/build/bin/llama-moe-trace"
-SAFE_RUN = ROOT / "moevm/phase0/safe_run.py"
-MODEL = Path("$MOEVM_MODELS_DIR/qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf")
-INDEX = Path("$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.idx")
-COMPONENT_INDEX = Path("$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm.cidx")
-SIDECAR = Path("$MOEVM_MODELS_DIR/qwen3-coder-next/qwen3-next-q3.moevm")
-RUNS = ROOT / "moevm/runs"
+from moevm_paths import LLAMA_BIN, MODELS_DIR, RUNS, SAFE_RUN
+
+
+MODEL = MODELS_DIR / "qwen3-coder-next/Qwen3-Coder-Next-UD-Q3_K_XL.gguf"
+INDEX = MODELS_DIR / "qwen3-coder-next/qwen3-next-q3.moevm.idx"
+COMPONENT_INDEX = MODELS_DIR / "qwen3-coder-next/qwen3-next-q3.moevm.cidx"
+SIDECAR = MODELS_DIR / "qwen3-coder-next/qwen3-next-q3.moevm"
 
 
 @dataclass(frozen=True)

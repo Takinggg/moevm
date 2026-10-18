@@ -27,15 +27,13 @@ from gptoss_activek_quality import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[2]
-RUNS = ROOT / "moevm/runs"
-SAFE_RUN = ROOT / "moevm/phase0/safe_run.py"
-LLAMA_BIN = ROOT / "external/llama.cpp/build/bin/llama-moe-trace"
+from moevm_paths import LLAMA_BIN, MODELS_DIR, RUNS, SAFE_RUN
 
-DEFAULT_MODEL = Path("$MOEVM_MODELS_DIR/qwen3-coder-next-q4/Qwen3-Coder-Next-Q4_K_M.gguf")
-DEFAULT_INDEX = Path("$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.idx")
-DEFAULT_COMPONENT_INDEX = Path("$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm.cidx")
-DEFAULT_SIDECAR = Path("$MOEVM_MODELS_DIR/qwen3-coder-next-q4/qwen3-next-q4.moevm")
+
+DEFAULT_MODEL = MODELS_DIR / "qwen3-coder-next-q4/Qwen3-Coder-Next-Q4_K_M.gguf"
+DEFAULT_INDEX = MODELS_DIR / "qwen3-coder-next-q4/qwen3-next-q4.moevm.idx"
+DEFAULT_COMPONENT_INDEX = MODELS_DIR / "qwen3-coder-next-q4/qwen3-next-q4.moevm.cidx"
+DEFAULT_SIDECAR = MODELS_DIR / "qwen3-coder-next-q4/qwen3-next-q4.moevm"
 
 
 def build_command(task, mode: str, args: argparse.Namespace, log: Path, summary: Path, trace: Path, generated: Path) -> list[str]:
