@@ -19,20 +19,14 @@ for tool in git cmake c++; do
   command -v "$tool" >/dev/null || { echo "error: '$tool' not found (install Xcode command line tools and CMake)" >&2; exit 1; }
 done
 
-# The fork's moe-trace target compiles phase0/moevm_runtime.cpp through the
-# relative path ../../../../moevm/phase0, so this checkout must be named "moevm".
-if [ "$(basename "$ROOT")" != "moevm" ]; then
-  echo "error: clone this repository into a directory named 'moevm' (found '$(basename "$ROOT")')" >&2
-  exit 1
-fi
-
 if [ -d "$DIR/.git" ]; then
   echo "using existing fork checkout: $DIR ($(git -C "$DIR" rev-parse --short HEAD))"
 else
   git clone --branch "$REF" --single-branch "$REPO" "$DIR"
 fi
 
-cmake -S "$DIR" -B "$DIR/build" -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON
+# llama-moe-trace compiles this repository's phase0/moevm_runtime.cpp.
+cmake -S "$DIR" -B "$DIR/build" -DCMAKE_BUILD_TYPE=Release -DGGML_METAL=ON -DMOEVM_PHASE0_DIR="$ROOT/phase0"
 cmake --build "$DIR/build" --target llama-moe-trace -j "$(sysctl -n hw.ncpu)"
 
 BIN="$DIR/build/bin/llama-moe-trace"
