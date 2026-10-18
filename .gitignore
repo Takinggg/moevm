@@ -1,0 +1,33 @@
+# llama.cpp fork checkout and build (see README)
+external/
+
+# Model weights, packed sidecars and their indexes: tens of GiB, never commit
+*.gguf
+*.safetensors
+*.bin
+*.moevm
+*.moevm.idx
+*.moevm.cidx
+*.logits
+
+# Native phase0 tools built from phase0/*.cpp
+phase0/pager_replay
+phase0/runtime_replay
+phase0/runtime_smoke
+
+# Run artifacts: keep summaries, prompts, small comparison JSONs and the
+# curated evidence logs cited by the README; everything else stays local
+runs/*
+!runs/*.md
+!runs/prompt_*.txt
+!runs/qwen3_next_q4_p0d_*.json
+!runs/evidence/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Local environment and OS files
+.env
+.DS_Store
