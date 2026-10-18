@@ -35,7 +35,7 @@ sys.path.insert(0, str(PHASE0))
 
 from compare_decode_logs import parse_log  # noqa: E402  (needs PHASE0 on sys.path)
 from compare_logits import compare, read_header  # noqa: E402
-from moevm_paths import LLAMA_BIN, MODELS_DIR, ROOT, RUNS, SAFE_RUN  # noqa: E402
+from moevm_paths import LLAMA_BIN, MODELS_DIR, RUNS, SAFE_RUN  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -45,6 +45,13 @@ class Preset:
     sidecar_stem: str
     download: str
     published: dict
+
+
+@dataclass(frozen=True)
+class Setup:
+    paths: dict
+    work: Path
+    safe_args: tuple  # extra safe_run.py flags chosen on the command line
 
 
 PRESETS = {
@@ -115,7 +122,8 @@ def run_checked(cmd: list, what: str) -> None:
         sys.exit(f"error: {what} failed with exit code {result.returncode}")
 
 
-def ensure_sidecar(paths: dict, work: Path) -> None:
+def ensure_sidecar(setup: Setup) -> None:
+    paths, work = setup.paths, setup.work
     if all(paths[key].exists() for key in ("sidecar", "index", "component_index")):
         return
     need = sum(p.stat().st_size for p in paths["shards"]) + 5 * GIB
@@ -126,7 +134,7 @@ def ensure_sidecar(paths: dict, work: Path) -> None:
     py = sys.executable
     run_checked([py, PHASE0 / "sidecar_plan.py", "--out", plan, *paths["shards"]], "planning sidecar")
     run_checked([py, SAFE_RUN, "--log", work / "sidecar_pack.log", "--summary", work / "sidecar_pack.safe_summary",
-                 "--max-seconds", "3600", "--", py, PHASE0 / "sidecar_pack.py", "--plan", plan,
+                 "--max-seconds", "3600", *setup.safe_args, "--", py, PHASE0 / "sidecar_pack.py", "--plan", plan,
                  "--out", paths["sidecar"], "--summary", work / "sidecar_pack.json", "--nocache"],
                 f"packing sidecar into {paths['sidecar']} (about the size of the model)")
     for script, key in (("sidecar_index.py", "index"), ("sidecar_component_index.py", "component_index")):
@@ -134,10 +142,10 @@ def ensure_sidecar(paths: dict, work: Path) -> None:
                     f"building {paths[key].name}")
 
 
-def run_decode(paths: dict, extra: list, log: Path, logits: Path) -> dict:
+def run_decode(setup: Setup, extra: list, log: Path, logits: Path) -> dict:
     cmd = [sys.executable, SAFE_RUN, "--log", log, "--summary", log.with_suffix(".safe_summary"),
-           "--max-seconds", "900", "--", "/usr/bin/env", "GGML_OP_OFFLOAD_MIN_BATCH=1", LLAMA_BIN,
-           "-m", paths["shards"][0], "--logits-out", logits, *extra, *QWEN_COMMON]
+           "--max-seconds", "900", *setup.safe_args, "--", "/usr/bin/env", "GGML_OP_OFFLOAD_MIN_BATCH=1", LLAMA_BIN,
+           "-m", setup.paths["shards"][0], "--logits-out", logits, *extra, *QWEN_COMMON]
     run_checked(cmd, f"decoding -> {log.name}")
     parsed = parse_log(log)
     decoded = parsed.get("decoded")
@@ -174,7 +182,8 @@ def stats(values: list[float]) -> dict:
     return {"runs": len(values), "median": statistics.median(values), "min": min(values), "max": max(values)}
 
 
-def bench_qwen(preset: Preset, paths: dict, runs: int, work: Path) -> dict:
+def bench_qwen(preset: Preset, setup: Setup, runs: int) -> dict:
+    paths, work = setup.paths, setup.work
     moevm = ["--moevm-index", paths["index"], "--moevm-component-index", paths["component_index"],
              "--moevm-sidecar", paths["sidecar"], *QWEN_MOEVM]
     results = {"off": [], "on": []}
@@ -182,7 +191,7 @@ def bench_qwen(preset: Preset, paths: dict, runs: int, work: Path) -> dict:
     for i in range(runs):
         for mode, extra in (("off", []), ("on", moevm)):
             log = work / f"qwen_{mode}_{i:02d}.log"
-            results[mode].append(run_decode(paths, extra, log, work / f"qwen_{mode}.logits"))
+            results[mode].append(run_decode(setup, extra, log, work / f"qwen_{mode}.logits"))
         parity.append(logits_parity(work / "qwen_off.logits", work / "qwen_on.logits"))
     summary = {mode: {**stats([r["tok_s"] for r in rows]), "published": preset.published[mode]}
                for mode, rows in results.items()}
@@ -207,8 +216,10 @@ def qwen_table(report: dict) -> list[str]:
     return lines
 
 
-def bench_gptoss(paths: dict, runs: int, work: Path) -> dict:
-    out = work / "gptoss_soak"
+def bench_gptoss(setup: Setup, runs: int) -> dict:
+    paths, out = setup.paths, setup.work / "gptoss_soak"
+    if setup.safe_args:
+        sys.exit("error: --allow-docker is not supported for gpt-oss-120b; stop Docker/VMs first")
     run_checked([sys.executable, PHASE0 / "gptoss_soak.py", "--iterations", runs, "--tokens", "128", "--ctx", "4096",
                  "--arena-gib", "24", "--trim-min-gib", "12", "--pool-capacity", "16", "--prefetch-topk", "4",
                  "--moevm-threads", "4", "--copy-mode", "memcpy", "--logits-every", "0",
@@ -238,6 +249,8 @@ def main() -> int:
     parser.add_argument("preset", choices=sorted(PRESETS))
     parser.add_argument("--runs", type=int, help="runs per mode (default: 3 for qwen, 5 for gpt-oss)")
     parser.add_argument("--out-dir", type=Path, help="default: runs/bench_<preset>_<timestamp>")
+    parser.add_argument("--allow-docker", action="store_true",
+                        help="let safe_run.py proceed while Docker or a VM is running (they compete for memory)")
     args = parser.parse_args()
     preset = PRESETS[args.preset]
     runs = args.runs or (3 if args.preset.startswith("qwen") else 5)
@@ -247,19 +260,20 @@ def main() -> int:
     check_environment(preset, paths)
     work = args.out_dir or RUNS / f"bench_{args.preset}_{time.strftime('%Y%m%d_%H%M%S')}"
     work.mkdir(parents=True, exist_ok=True)
-    ensure_sidecar(paths, work)
+    setup = Setup(paths, work, ("--allow-docker",) if args.allow_docker else ())
+    ensure_sidecar(setup)
     if args.preset.startswith("qwen"):
-        report = bench_qwen(preset, paths, runs, work)
+        report = bench_qwen(preset, setup, runs)
         table = qwen_table(report)
     else:
-        report = bench_gptoss(paths, runs, work)
+        report = bench_gptoss(setup, runs)
         table = gptoss_table(report)
     report["preset"] = args.preset
     report["llama_bin"] = str(LLAMA_BIN)
     (work / "summary.json").write_text(json.dumps(report, indent=2, default=str) + "\n")
     (work / "summary.md").write_text(f"# MoEVM benchmark: {args.preset}\n\n" + "\n".join(table) + "\n")
     print("\n" + "\n".join(table))
-    print(f"\nwritten: {work / 'summary.md'} (relative to {ROOT})")
+    print(f"\nwritten: {work / 'summary.md'}")
     return 0
 
 
